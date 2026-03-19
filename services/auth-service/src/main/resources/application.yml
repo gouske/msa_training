@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    # DB가 어디 있는지 주소를 적습니다 (내 컴퓨터의 5432번 포트)
+    url: jdbc:postgresql://localhost:5432/auth_db
+    username: myuser
+    password: mypassword
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    # 서비스를 켤 때마다 테이블을 자동으로 만들어주는 마법 같은 설정
+    hibernate:
+      ddl-auto: update
+    # 데이터베이스와 어떤 대화를 하는지 콘솔창에 보여줘!
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true

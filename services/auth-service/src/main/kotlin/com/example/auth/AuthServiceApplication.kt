@@ -1,4 +1,4 @@
-package com.msa_training.auth_service
+package com.example.auth
 
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication

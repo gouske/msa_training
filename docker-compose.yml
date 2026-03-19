@@ -1,0 +1,13 @@
+services:
+  # 1. 서비스 이름: postgres-db
+  postgres-db:
+    # 2. 사용할 이미지: PostgreSQL 15 버전 박스를 가져와라
+    image: postgres:15
+    # 3. 환경 설정: 창고 문을 열기 위한 열쇠(비밀번호) 설정
+    environment:
+      POSTGRES_USER: myuser        # 관리자 아이디
+      POSTGRES_PASSWORD: mypassword # 관리자 비밀번호
+      POSTGRES_DB: auth_db         # 처음 만들 장부(데이터베이스) 이름
+    # 4. 통로 연결 (Port): 외부(내 컴퓨터)의 5432번 통로와 컨테이너 안의 5432번 통로를 연결
+    ports:
+      - "5432:5432"

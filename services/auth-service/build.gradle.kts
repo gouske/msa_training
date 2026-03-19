@@ -6,9 +6,9 @@ plugins {
     kotlin("plugin.jpa") version "2.2.21"
 }
 
-group = "com.msa_training"
+group = "com.example"
 version = "0.0.1-SNAPSHOT"
-description = "auth_service"
+description = "auth-service"
 
 java {
     toolchain {
