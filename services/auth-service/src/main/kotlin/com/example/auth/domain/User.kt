@@ -14,7 +14,7 @@ class User(
     var email: String,
 
     @Column(nullable = false)
-    var password: String, // 암호화된 비밀번호가 저장될 곳
+    var password: String = "", // 암호화된 비밀번호가 저장될 곳
 
     @Column(nullable = false)
     var name: String,
