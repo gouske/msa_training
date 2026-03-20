@@ -35,16 +35,30 @@ class JwtTokenProvider {
     /**
      * 사용자의 이메일을 받아서 '디지털 통행증'을 만드는 함수입니다.
      */
+    // 1. 토큰을 만들 때 (createToken 함수)
     fun createToken(email: String): String {
-        val claims = Jwts.claims().setSubject(email) // 토큰 주인 정보 입력
         val now = Date()
-        val validity = Date(now.time + validityInMilliseconds) // 만료 시간 계산
+        val validity = Date(now.time + validityInMilliseconds)
 
         return Jwts.builder()
-            .setClaims(claims) // 내용물 담기
-            .setIssuedAt(now)  // 발급 시간 기록
-            .setExpiration(validity) // 만료 시간 기록
-            .signWith(secretKey) // 서버의 비밀 도장으로 꽝!
-            .compact() // 압축해서 문자열로 반환
+            .subject(email) // .setSubject() 대신 .subject()로 더 간결해졌습니다.
+            .issuedAt(now)
+            .expiration(validity)
+            .signWith(secretKey) // 최신 버전은 알고리즘을 생략해도 key를 보고 알아서 판단합니다.
+            .compact()
+    }
+
+    // 2. 토큰을 검증할 때 (validateToken 함수)
+    fun validateToken(token: String): Boolean {
+        return try {
+            // .parserBuilder() 대신 .parser()를 사용하고 바로 열쇠를 꽂습니다.
+            Jwts.parser()
+                .verifyWith(secretKey as javax.crypto.SecretKey) // 보안이 강화되어 전용 열쇠 타입을 요구합니다.
+                .build()
+                .parseSignedClaims(token) // parseClaimsJws 대신 이 이름을 씁니다.
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 }
