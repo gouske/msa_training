@@ -3,14 +3,31 @@ package com.example.auth.config
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.SignatureAlgorithm
 import io.jsonwebtoken.security.Keys
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
+import java.nio.charset.StandardCharsets
+import java.security.Key
 import java.util.*
+import jakarta.annotation.PostConstruct
 
 @Component // 1. 스프링이 관리하는 "토큰 제조기" 부품으로 등록합니다.
 class JwtTokenProvider {
 
+    // 💡 연결의 핵심: @Value : org.springframework.beans.factory.annotation.Value
+    // 스프링이 application.yml을 뒤져서 'jwt.secret'에 적힌 글자를 찾아
+    // 이 secretKeyString 변수에 자동으로 배달(주입)해줍니다.
+    @Value("\${jwt.secret}")
+    private lateinit var secretKeyString: String
+
+    private lateinit var secretKey: Key // java.security.Key
     // 2. 토큰을 암호화할 때 쓸 '비밀 도장'입니다. 실무에선 환경 변수로 숨겨야 합니다.
-    private val secretKey = Keys.secretKeyFor(SignatureAlgorithm.HS256)
+//    private val secretKey = Keys.secretKeyFor(SignatureAlgorithm.HS256)
+
+    @PostConstruct
+    fun init() {
+        // 배달받은 글자를 실제 도장(Key) 객체로 바꿉니다.
+        this.secretKey = Keys.hmacShaKeyFor(secretKeyString.toByteArray(StandardCharsets.UTF_8))
+    }
 
     // 3. 토큰의 유효 기간 (예: 1시간)
     private val validityInMilliseconds: Long = 3600000

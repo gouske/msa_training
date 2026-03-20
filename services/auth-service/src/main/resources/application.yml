@@ -15,3 +15,8 @@ spring:
     properties:
       hibernate:
         format_sql: true
+
+# 왼쪽 끝에 딱 붙여서 시작
+jwt:
+  # ${이름:기본값}은 "이 이름의 환경변수가 있으면 쓰고, 없으면 기본값을 써"라는 뜻입니다.
+  secret: ${JWT_SECRET_KEY:default-local-test-key-1234567890}
