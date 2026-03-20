@@ -1,5 +1,6 @@
 package com.example.auth.controller
 
+import com.example.auth.dto.LoginRequest
 import com.example.auth.dto.SignUpRequest
 import com.example.auth.service.AuthService
 import org.springframework.http.ResponseEntity
@@ -33,6 +34,18 @@ class AuthController(
                 "email" to savedUser.email,
                 "name" to savedUser.name
             )
+        ))
+    }
+
+    @PostMapping("/login")
+    fun login(@RequestBody request: LoginRequest): ResponseEntity<Any> {
+        // 1. 서비스에게 로그인 일을 시키고 토큰을 받아옵니다.
+        val token = authService.login(request.email, request.password)
+
+        // 2. 사용자에게 "로그인 성공!" 메시지와 함께 통행증을 전달합니다.
+        return ResponseEntity.ok(mapOf(
+            "message" to "로그인 성공!",
+            "accessToken" to token
         ))
     }
 

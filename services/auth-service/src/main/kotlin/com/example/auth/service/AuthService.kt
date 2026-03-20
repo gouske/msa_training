@@ -1,5 +1,6 @@
 package com.example.auth.service
 
+import com.example.auth.config.JwtTokenProvider
 import com.example.auth.domain.User
 import com.example.auth.domain.UserRepository
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
@@ -9,7 +10,8 @@ import org.springframework.transaction.annotation.Transactional
 @Service // 1. "나는 실제 업무(로직)를 처리하는 서비스야!"라고 선언합니다.
 class AuthService(
     private val userRepository: UserRepository, // DB와 대화하는 통역사를 데려옵니다.
-    private val passwordEncoder: BCryptPasswordEncoder // 암호화 기계를 데려옵니다.
+    private val passwordEncoder: BCryptPasswordEncoder, // 암호화 기계를 데려옵니다.
+    private val jwtTokenProvider: JwtTokenProvider
 ) {
 
     /**
@@ -37,5 +39,19 @@ class AuthService(
 
         // 6. DB 창고에 저장하고, 저장된 결과물을 반환합니다.
         return userRepository.save(newUser)
+    }
+
+    fun login(email: String, rawPassword: String): String {
+        // 1. 가입된 회원인지 확인
+        val user = userRepository.findByEmail(email)
+            ?: throw RuntimeException("가입되지 않은 이메일입니다.")
+
+        // 2. 비밀번호가 일치하는지 확인 (암호화된 것과 입력받은 것 비교)
+        if (!passwordEncoder.matches(rawPassword, user.password)) {
+            throw RuntimeException("비밀번호가 일치하지 않습니다.")
+        }
+
+        // 3. 로그인이 성공했으니 '디지털 통행증'을 발급해서 돌려줍니다.
+        return jwtTokenProvider.createToken(user.email)
     }
 }
