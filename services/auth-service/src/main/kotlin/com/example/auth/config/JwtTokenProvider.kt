@@ -1,9 +1,11 @@
 package com.example.auth.config
 
 import io.jsonwebtoken.Jwts
-import io.jsonwebtoken.SignatureAlgorithm
 import io.jsonwebtoken.security.Keys
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
+import org.springframework.security.core.Authentication
+import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.stereotype.Component
 import java.nio.charset.StandardCharsets
 import java.security.Key
@@ -60,5 +62,29 @@ class JwtTokenProvider {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * [실무 핵심] 토큰을 까서 "이 사람은 누구인가?"를 증명하는 신분증(Authentication)을 만듭니다.
+     * 팔찌를 보고 "이 사람은 홍길동이네"라고 인증 정보를 만들어주는 함수입니다.
+     */
+    fun getAuthentication(token: String): Authentication {
+        // 1. 토큰을 우리 비밀 열쇠로 열어서 그 안의 내용물(Claims)을 가져옵니다.
+        val claims = Jwts.parser()
+            .verifyWith(secretKey as javax.crypto.SecretKey)
+            .build()
+            .parseSignedClaims(token)
+            .payload
+
+        // 2. 토큰 주인(Subject)인 이메일을 꺼냅니다.
+        val email = claims.subject
+
+        // 3. 실무 팁: 이 사람의 권한(Role)을 설정합니다.
+        // 지금은 기본 권한인 'ROLE_USER'를 부여하겠습니다.
+        val authorities = listOf(SimpleGrantedAuthority("ROLE_USER"))
+
+        // 4. 최종적으로 스프링 시큐리티가 인정하는 '공식 신분증'을 만들어 반환합니다.
+        // (이름, 비밀번호(보안상 비움), 권한 리스트) 순서입니다.
+        return UsernamePasswordAuthenticationToken(email, "", authorities)
     }
 }

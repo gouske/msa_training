@@ -1,15 +1,18 @@
 package com.example.auth.controller
 
+import com.example.auth.config.JwtTokenProvider
 import com.example.auth.dto.LoginRequest
 import com.example.auth.dto.SignUpRequest
 import com.example.auth.service.AuthService
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 
 @RestController // 1. 이 클래스는 웹 요청을 받는 '문지기'입니다.
 @RequestMapping("/api/auth") // 2. 모든 요청 주소는 /api/auth로 시작합니다.
 class AuthController(
-    private val authService: AuthService // 3. 실제 업무를 처리할 '지배인(Service)'을 데려옵니다.
+    private val authService: AuthService, // 3. 실제 업무를 처리할 '지배인(Service)'을 데려옵니다.
+    private val jwtTokenProvider: JwtTokenProvider // 토큰 검사 업무를 처리할
 ) {
 
     /**
@@ -47,6 +50,25 @@ class AuthController(
             "message" to "로그인 성공!",
             "accessToken" to token
         ))
+    }
+
+    /**
+     * 다른 서비스(주문 등)에서 "이 토큰 유효해?"라고 물어볼 때 답해주는 API
+     */
+    @GetMapping("/validate")
+    fun validate(@RequestHeader("Authorization") authHeader: String): ResponseEntity<Any> {
+        // 1. "Bearer " 부분을 제외한 순수 토큰만 추출
+        val token = authHeader.substring(7)
+
+        // 2. 9강에서 만든 validateToken 함수로 검사
+        return if (jwtTokenProvider.validateToken(token)) {
+            // 성공 시 토큰 주인 정보(Email)를 돌려줌
+            val email = jwtTokenProvider.getAuthentication(token).name
+            ResponseEntity.ok(mapOf("valid" to true, "email" to email))
+        } else {
+            // 실패 시 401(권한 없음) 에러
+            ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(mapOf("valid" to false))
+        }
     }
 
     @GetMapping("/health")
