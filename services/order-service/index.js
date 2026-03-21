@@ -1,14 +1,19 @@
 // 1. 필요한 부품(Express)을 불러옵니다.
 const express = require('express');
 const axios = require('axios'); // 다른 서버에 요청을 보낼 도구(전화기)
-const app = express();
+const mongoose = require('mongoose'); // DB 도구
+const Order = require('./models/Order'); // 위에서 만든 모델
 
 // 2. 서버가 사용할 문 번호(Port)를 정합니다.
 // Auth 서비스가 8080을 쓰고 있으니, 주문 서비스는 8081을 쓰겠습니다.
 const PORT = 8081;
 
 // 3. JSON 형태의 택배 박스를 해석할 수 있게 설정합니다.
+const app = express();
 app.use(express.json());
+
+// 🔌 DB 연결 (실무에선 환경변수로 처리합니다)
+mongoose.connect('mongodb://localhost:27017/order_db');
 
 /**
  * 🛒 주문 생성 API (POST /api/order)
@@ -36,18 +41,21 @@ app.post('/api/order', async (req, res) => {
             console.log(`✅ 인증 성공: 사용자 [${userEmail}]의 주문을 처리합니다.`);
 
             // 실제로는 여기서 DB에 주문을 저장하겠죠?
-            const orderResult = {
-                orderId: Math.floor(Math.random() * 10000),
+            // 💾 [실무 코드] 새로운 주문 객체를 만들어 DB에 저장합니다.
+            const newOrder = new Order({
+                userEmail: userEmail,
                 itemId: itemId,
                 quantity: quantity,
-                status: "CREATED",
-                authMessage: authResponse.data // 인증 서비스가 보내준 메시지 포함
-            };
+                status: "SUCCESS"
+            });
+
+            const savedOrder = await newOrder.save(); // 실제 DB 저장 실행!
+            console.log(`✅ 주문 저장 완료: ID ${savedOrder._id}`);
 
             return res.status(201).json({
                 message: "주문이 성공적으로 생성되었습니다.",
-                orderId: `ORD-${Date.now()}`,
-                order: orderResult,
+                orderId: savedOrder._id,
+                order: savedOrder,
                 buyer: userEmail
             });
         }
