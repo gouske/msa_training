@@ -1,13 +1,86 @@
+version: '3.8'
+
 services:
-  # 1. 서비스 이름: postgres-db
-  postgres-db:
+  # 1. 출입문 (Gateway)
+  # 서비스 이름
+  gateway-service:
+    build: ./services/gateway-service/GatewayService
+    ports:
+      - "9000:9000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # [핵심] YARP 설정을 환경 변수로 덮어쓰기 (계층 구조는 __ 로 연결)
+      # 1. 닷넷 시스템은 환경 변수를 가장 나중에 읽습니다. (우선순위 높음)
+      # 2. 아래 설정이 있으면 appsettings.json의 "localhost"는 무시됩니다.
+      - ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address=http://auth-service:8080/api/
+      - ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address=http://order-service:8081/api/
+      - ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address=http://payment-service:8082/api/
+    depends_on:
+      - auth-service
+      - order-service
+      - payment-service
+
+  # 2. 인증 (Java/Kotlin)
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "8080:8080"
+    environment:
+      # [핵심] localhost 대신 서비스 이름(auth-db) 사용!
+      SPRING_DATASOURCE_URL: jdbc:postgresql://auth-db:5432/auth_db
+      SPRING_DATASOURCE_USERNAME: myuser
+      SPRING_DATASOURCE_PASSWORD: mypassword
+    depends_on:
+      - auth-db
+
+  # 3. 주문 (Node.js)
+  order-service:
+    build: ./services/order-service
+    ports:
+      - "8081:8081"
+    environment:
+      MONGO_URI: mongodb://order-db:27017/order_db
+      AUTH_HOST: auth-service
+      PAYMENT_HOST: payment-service
+    depends_on:
+      - order-db
+      - payment-service
+
+  # 4. 결제 (python)
+  payment-service:
+    build: ./services/payment-service
+    ports:
+      - "8082:8082"
+
+  # 1. 서비스 이름
+  auth-db:
     # 2. 사용할 이미지: PostgreSQL 15 버전 박스를 가져와라
     image: postgres:15
-    # 3. 환경 설정: 창고 문을 열기 위한 열쇠(비밀번호) 설정
+    container_name: auth-db
     environment:
-      POSTGRES_USER: myuser        # 관리자 아이디
-      POSTGRES_PASSWORD: mypassword # 관리자 비밀번호
-      POSTGRES_DB: auth_db         # 처음 만들 장부(데이터베이스) 이름
-    # 4. 통로 연결 (Port): 외부(내 컴퓨터)의 5432번 통로와 컨테이너 안의 5432번 통로를 연결
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: auth_db
     ports:
       - "5432:5432"
+
+  order-db:
+    image: mongo:latest
+    container_name: order-db
+    environment:
+      MONGO_INITDB_DATABASE: order_db
+    ports:
+      - "27017:27017"  # 내 컴퓨터의 27017 포트를 컨테이너의 27017로 연결
+
+  # # 서비스 이름: postgres-db
+  # postgres-db:
+  #   # 사용할 이미지: PostgreSQL 15 버전 박스를 가져와라
+  #   image: postgres:15
+  #   # 3. 환경 설정: 창고 문을 열기 위한 열쇠(비밀번호) 설정
+  #   environment:
+  #     POSTGRES_USER: myuser        # 관리자 아이디
+  #     POSTGRES_PASSWORD: mypassword # 관리자 비밀번호
+  #     POSTGRES_DB: auth_db         # 처음 만들 장부(데이터베이스) 이름
+  #   # 4. 통로 연결 (Port): 외부(내 컴퓨터)의 5432번 통로와 컨테이너 안의 5432번 통로를 연결
+  #   ports:
+  #     - "5432:5432"

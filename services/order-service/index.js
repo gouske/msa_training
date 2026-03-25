@@ -8,12 +8,22 @@ const Order = require('./models/Order'); // 위에서 만든 모델
 // Auth 서비스가 8080을 쓰고 있으니, 주문 서비스는 8081을 쓰겠습니다.
 const PORT = 8081;
 
+// 환경 변수 MONGO_URI가 있으면 그걸 쓰고, 없으면(로컬 실행 시) localhost를 써라!
+// DB 및 외부 서비스 연결 설정 (환경변수 || 기본값)
+const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/order_db';
+// Auth Service 주소도 환경에 따라 변경 (Docker: auth-service, Local: localhost)
+const authUrl = process.env.AUTH_HOST || 'localhost'; // `http://${AUTH_HOST}:8080/api/auth/validate`;
+const paymentUrl = process.env.PAYMENT_HOST || 'localhost'; // `http://${AUTH_HOST}:8080/api/auth/validate`;
+
 // 3. JSON 형태의 택배 박스를 해석할 수 있게 설정합니다.
 const app = express();
 app.use(express.json());
 
 // 🔌 DB 연결 (실무에선 환경변수로 처리합니다)
-mongoose.connect('mongodb://localhost:27017/order_db');
+// mongoose.connect('mongodb://order-db:27017/order_db');
+mongoose.connect(mongoURI)
+    .then(() => console.log('MongoDB Connected...'))
+    .catch(err => console.log(err));
 
 /**
  * 🛒 주문 생성 API (POST /api/order)
@@ -31,7 +41,9 @@ app.post('/api/order', async (req, res) => {
         // 2. [실무 핵심] 인증 서비스의 /validate API를 호출하면서 받은 토큰을 그대로 넘깁니다.
         console.log("☎️ 인증 서비스에 상태 확인 요청 중...");
         
-        const authResponse = await axios.get('http://localhost:8080/api/auth/validate', {
+        const authResponse = await axios.get(`http://${authUrl}:8080/api/auth/validate`, {
+        // const authResponse = await axios.get('http://auth-service:8080/api/auth/validate', {
+        // const authResponse = await axios.get(authUrl, {
             headers: { Authorization: authHeader } // 토큰 전달(Relay)
         });
 
@@ -61,7 +73,8 @@ app.post('/api/order', async (req, res) => {
         // 6. 결제 서비스(Python) 호출
         try {
             // 💰 결제 서비스(Python) 호출!!
-            const paymentResponse = await axios.post('http://localhost:8082/api/payment/process', {
+            // const paymentResponse = await axios.post('http://payment-service:8082/api/payment/process', {
+            const paymentResponse = await axios.post(`http://${paymentUrl}:8082/api/payment/process`, {
                 orderId: savedOrder._id, // 실제로는 생성된 DB ID를 넣습니다.
                 amount: price * quantity
             });
@@ -70,12 +83,22 @@ app.post('/api/order', async (req, res) => {
                 // 7. 결제 성공 시 주문 상태 업데이트
                 savedOrder.status = "SUCCESS";
                 await savedOrder.save();
+                console.log(`✅ 주문 결제 완료: ID ${savedOrder._id} SUCCESS`);
+
+                // [핵심] Mongoose 객체를 일반 객체로 변환합니다.
+                // # DB 전용 객체를 다루기 쉬운 일반 데이터 뭉치로 바꿉니다.
+                // const orderObject = savedOrder.toObject();
+                // # [핵심] 일반 객체에서 __v 필드만 골라 삭제합니다.
+                // delete orderObject.__v;
+
+                const orderObject = savedOrder.toJSON();
 
                 // DB에 주문 저장 로직...
                 return res.status(201).json({
                     message: "주문 및 결제 완료!",
                     orderId: savedOrder._id,
-                    order: savedOrder,
+                    // # __v가 제거된 정제된 데이터를 보냅니다.
+                    order: orderObject,
                     paymentInfo: paymentResponse.data,
                     buyer: userEmail
                 });

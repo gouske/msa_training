@@ -12,6 +12,7 @@ spring:
       ddl-auto: update
     # 데이터베이스와 어떤 대화를 하는지 콘솔창에 보여줘!
     show-sql: true
+    open-in-view: false
     properties:
       hibernate:
         format_sql: true
@@ -20,3 +21,9 @@ spring:
 jwt:
   # ${이름:기본값}은 "이 이름의 환경변수가 있으면 쓰고, 없으면 기본값을 써"라는 뜻입니다.
   secret: ${JWT_SECRET_KEY:default-local-test-key-1234567890}
+
+logging:
+  level:
+    org.hibernate.SQL: debug
+    org.hibernate.type.descriptor.sql.BasicBinder: trace
+    org.springframework.orm.jpa: debug
