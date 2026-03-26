@@ -8,13 +8,15 @@ services:
     ports:
       - "9000:9000"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
+      ASPNETCORE_ENVIRONMENT: Production
+      # [핵심] 모든 IP(외부 포함)에서 9000번 포트로 들어오는 접속을 허용합니다.
+      ASPNETCORE_URLS: http://+:9000
       # [핵심] YARP 설정을 환경 변수로 덮어쓰기 (계층 구조는 __ 로 연결)
       # 1. 닷넷 시스템은 환경 변수를 가장 나중에 읽습니다. (우선순위 높음)
       # 2. 아래 설정이 있으면 appsettings.json의 "localhost"는 무시됩니다.
-      - ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address=http://auth-service:8080/api/
-      - ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address=http://order-service:8081/api/
-      - ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address=http://payment-service:8082/api/
+      ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address: http://auth-service:8080/api/
+      ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address: http://order-service:8081/api/
+      ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address: http://payment-service:8082/api/
     depends_on:
       - auth-service
       - order-service
