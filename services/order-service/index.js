@@ -1,12 +1,15 @@
 // 1. 필요한 부품(Express)을 불러옵니다.
 const express = require('express');
-const axios = require('axios'); // 다른 서버에 요청을 보낼 도구(전화기)
 const mongoose = require('mongoose'); // DB 도구
 const Order = require('./models/Order'); // 위에서 만든 모델
 
 // [비동기 메시징] RabbitMQ 메시지 발행 모듈
 // 기존 동기식 HTTP 결제 호출을 대체합니다.
 const { sendOrderMessage } = require('./producer');
+
+// [서킷 브레이커] Auth Service 호출 보호 모듈
+// Auth Service 장애 시 빠른 실패(Fail Fast) 응답으로 연쇄 장애를 차단합니다.
+const { authBreaker } = require('./circuitBreaker');
 
 // 2. 서버가 사용할 문 번호(Port)를 정합니다.
 // Auth 서비스가 8080을 쓰고 있으니, 주문 서비스는 8081을 쓰겠습니다.
@@ -16,8 +19,6 @@ const PORT = 8081;
 // DB 및 외부 서비스 연결 설정 (환경변수 || 기본값)
 const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/order_db';
 // Auth Service 주소도 환경에 따라 변경 (Docker: auth-service, Local: localhost)
-const authUrl = process.env.AUTH_HOST || 'localhost'; // `http://${AUTH_HOST}:8080/api/auth/validate`;
-// const paymentUrl = process.env.PAYMENT_HOST || 'localhost'; // `http://${paymentUrl}:8082/api/payment/process`;
 
 // 3. JSON 형태의 택배 박스를 해석할 수 있게 설정합니다.
 const app = express();
@@ -42,14 +43,20 @@ app.post('/api/order', async (req, res) => {
     const { itemId, quantity, price } = req.body;
 
     try {
-        // 2. [실무 핵심] 인증 서비스의 /validate API를 호출하면서 받은 토큰을 그대로 넘깁니다.
+        // 2. [서킷 브레이커] Auth Service JWT 검증 호출
+        //    - CLOSED(정상): Auth Service를 직접 호출합니다.
+        //    - OPEN(차단 중): Auth Service 호출 없이 즉시 fallback 반환 → 빠른 실패
+        //    - HALF-OPEN(회복 시도): 테스트 요청 1건을 통과시켜 복구 여부 확인
         console.log("☎️ 인증 서비스에 상태 확인 요청 중...");
-        
-        const authResponse = await axios.get(`http://${authUrl}:8080/api/auth/validate`, {
-        // const authResponse = await axios.get('http://auth-service:8080/api/auth/validate', {
-        // const authResponse = await axios.get(authUrl, {
-            headers: { Authorization: authHeader } // 토큰 전달(Relay)
-        });
+        const authResponse = await authBreaker.fire(authHeader);
+
+        // 서킷 브레이커 OPEN 상태의 fallback 응답 감지
+        // fallback은 { data: { valid: false, reason: 'circuit_open' } }를 반환합니다.
+        if (authResponse.data.reason === 'circuit_open') {
+            return res.status(503).json({
+                message: "인증 서비스가 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요."
+            });
+        }
 
         // 3. 인증 서비스가 인증 실패를 반환하면 오류 처리.
         if (!authResponse.data.valid) {
@@ -180,8 +187,15 @@ app.post('/api/order/callback', async (req, res) => {
 });
 
 // 5. "나 살아있어!"라고 외치는 Health Check 입구를 만듭니다.
+// 서킷 브레이커 상태도 함께 반환하여 모니터링에 활용합니다.
 app.get('/api/order/health', (req, res) => {
-    res.json({ message: "✅ Order Service is Running on Node.js!" });
+    // authBreaker.opened: true면 OPEN(차단 중), false면 CLOSED(정상) 또는 HALF-OPEN
+    const cbState = authBreaker.opened ? "OPEN" : "CLOSED";
+    res.json({
+        status: "OK",
+        message: "✅ Order Service is Running on Node.js!",
+        authCircuitBreaker: cbState,
+    });
 });
 
 // 6. 서버를 가동합니다.

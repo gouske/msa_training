@@ -23,3 +23,10 @@ obj/
 .vscode/
 .DS_Store
 *.swp
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Codex
+AGENTS.md
