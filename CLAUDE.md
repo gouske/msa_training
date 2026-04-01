@@ -1,0 +1,73 @@
+# CLAUDE.md
+
+이 파일은 Claude Code(claude.ai/code)가 이 저장소에서 작업할 때 참고하는 가이드입니다.
+
+## 프로젝트 개요
+
+4개의 서비스를 서로 다른 기술 스택으로 구현한 MSA(마이크로서비스 아키텍처) 학습 프로젝트.
+
+| 서비스 | 기술 스택 | 포트 |
+|--------|----------|------|
+| gateway-service | C#/.NET 8 + YARP | 9000 |
+| auth-service | Kotlin + Spring Boot | 8080 |
+| order-service | Node.js + Express | 8081 |
+| payment-service | Python + FastAPI | 8082 |
+| rabbitmq | RabbitMQ 3 (management) | 5672 / 15672 |
+
+## 전체 스택 실행
+
+```bash
+docker-compose up          # 전체 서비스 시작
+docker-compose down        # 전체 서비스 중지
+docker-compose up --build  # 재빌드 후 시작
+```
+
+RabbitMQ 관리 대시보드: `http://localhost:15672` (guest / guest)
+
+## 아키텍처
+
+### 요청 라우팅
+
+```
+클라이언트 → Gateway (포트 9000) → /auth/*    → auth-service:8080
+                                 → /order/*   → order-service:8081
+                                 → /payment/* → payment-service:8082
+```
+
+게이트웨이는 YARP를 사용해 경로의 첫 번째 세그먼트를 제거하고 각 서비스의 `/api/` 경로로 전달한다.
+
+### 주문 생성 시 서비스 간 호출 흐름 (비동기)
+
+```
+POST /order (클라이언트)
+  → Order Service
+      1. GET auth-service:8080/api/auth/validate  (JWT 검증)
+      2. MongoDB에 주문 저장 (PENDING)
+      3. RabbitMQ order_queue에 메시지 발행
+      4. 202 Accepted 즉시 반환
+
+[백그라운드]
+  RabbitMQ → Payment Service (Consumer 스레드)
+      5. 결제 처리
+      6. POST order-service:8081/api/order/callback
+      7. 주문 상태 업데이트 → SUCCESS / FAILED
+```
+
+## 커밋 메시지 규칙
+
+한글로 작성하며 Conventional Commits 형식을 따른다.
+
+```
+feat(service): 기능 설명
+fix(service): 버그 수정 내용
+refactor(service): 리팩토링 내용
+```
+
+## 서비스별 상세 정보
+
+특정 서비스 작업 시 해당 서비스의 `CLAUDE.md`를 읽어 컨텍스트를 파악할 것.
+
+- **Gateway**: `services/gateway-service/CLAUDE.md`
+- **Auth**: `services/auth-service/CLAUDE.md`
+- **Order**: `services/order-service/CLAUDE.md`
+- **Payment**: `services/payment-service/CLAUDE.md`

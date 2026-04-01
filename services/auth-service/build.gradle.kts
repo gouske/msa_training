@@ -47,12 +47,15 @@ dependencies {
     runtimeOnly("org.postgresql:postgresql")
     annotationProcessor("org.projectlombok:lombok")
 
-    // 테스트 의존성들도 버전에 맞게 자동 관리되도록 수정
-    testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-security-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-web-test")
+    // 테스트 의존성: Spring Boot 통합 테스트 + 보안 테스트 + JUnit 5
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // Mockito: 가짜(Mock) 객체를 만들어 단위 테스트에서 외부 의존성을 격리합니다.
+    testImplementation("org.mockito:mockito-core:5.14.2")
+    testImplementation("org.mockito:mockito-junit-jupiter:5.14.2")
 
     // JWT 생성을 위한 실무 표준 라이브러리
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
