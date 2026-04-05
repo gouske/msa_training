@@ -13,6 +13,10 @@
 | order-service | Node.js + Express | 8081 |
 | payment-service | Python + FastAPI | 8082 |
 | rabbitmq | RabbitMQ 3 (management) | 5672 / 15672 |
+| elasticsearch | Elasticsearch 8.17.0 | 9200 |
+| logstash | Logstash 8.17.0 | 5044 |
+| kibana | Kibana 8.17.0 | 5601 |
+| filebeat | Filebeat 8.17.0 | - |
 
 ## 전체 스택 실행
 

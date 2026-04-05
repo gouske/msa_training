@@ -17,6 +17,9 @@ services:
       ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address: http://auth-service:8080/api/
       ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address: http://order-service:8081/api/
       ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address: http://payment-service:8082/api/
+    # [제18강] 서비스 식별 라벨 — Filebeat/Promtail이 이 라벨로 서비스를 구분합니다.
+    labels:
+      service: "gateway-service"
     depends_on:
       - auth-service
       - order-service
@@ -32,6 +35,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://auth-db:5432/auth_db
       SPRING_DATASOURCE_USERNAME: myuser
       SPRING_DATASOURCE_PASSWORD: mypassword
+    labels:
+      service: "auth-service"
     depends_on:
       - auth-db
 
@@ -46,6 +51,8 @@ services:
       PAYMENT_HOST: payment-service
       # [비동기 메시징] RabbitMQ 연결 주소. 'rabbitmq'는 아래 서비스 이름과 일치해야 합니다.
       RABBITMQ_URL: amqp://rabbitmq
+    labels:
+      service: "order-service"
     depends_on:
       - order-db
       - payment-service
@@ -63,6 +70,8 @@ services:
       RABBITMQ_HOST: rabbitmq
       # Order Service 콜백 주소 (결제 완료 후 주문 상태 업데이트)
       ORDER_SERVICE_URL: http://order-service:8081
+    labels:
+      service: "payment-service"
     depends_on:
       - rabbitmq  # Consumer가 시작되려면 RabbitMQ가 먼저 실행되어야 합니다.
 
@@ -94,6 +103,148 @@ services:
       - "5672:5672"   # 실제 메시지가 오가는 포트 (AMQP 프로토콜)
       - "15672:15672" # 관리자 화면(대시보드) 포트 (브라우저로 확인 가능)
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # [제18강] 중앙 집중 로깅 — A) ELK Stack (활성화)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # ELK = Elasticsearch + Logstash + Kibana + Filebeat
+  #
+  # 로그 수집 흐름:
+  #   서비스 stdout → Docker json-file → Filebeat → Logstash → Elasticsearch → Kibana
+  #
+  # 각 역할:
+  #   Filebeat     = 우편 배달부 (로그 파일을 읽어서 Logstash로 전달)
+  #   Logstash     = 분류센터 (로그를 가공/필터링해서 Elasticsearch로 전달)
+  #   Elasticsearch = 도서관 (로그를 저장하고 검색할 수 있게 인덱싱)
+  #   Kibana       = 열람실 (저장된 로그를 브라우저에서 검색/시각화)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  # [도서관] Elasticsearch: 로그를 저장하고 검색하는 데이터베이스
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: elasticsearch
+    environment:
+      # 단일 노드 모드: 학습용이므로 클러스터 없이 단독 실행합니다.
+      - discovery.type=single-node
+      # 보안 기능 비활성화: 학습 환경에서 인증서/비밀번호 설정을 생략합니다.
+      - xpack.security.enabled=false
+      # JVM 메모리 제한: 기본 1GB → 512MB로 줄여서 학습용 PC에서도 실행 가능하게 합니다.
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"    # REST API 포트 (http://localhost:9200 으로 상태 확인)
+    volumes:
+      # 컨테이너를 재시작해도 저장된 로그 데이터가 유지되도록 볼륨을 연결합니다.
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    # 메모리 제한: 컨테이너가 사용할 수 있는 최대 메모리를 1GB로 제한합니다.
+    mem_limit: 1073741824
+
+  # [분류센터] Logstash: 로그를 받아서 필터링/가공 후 Elasticsearch에 저장
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.17.0
+    container_name: logstash
+    volumes:
+      # Logstash 전역 설정 파일을 컨테이너 안에 넣습니다. (:ro = 읽기 전용)
+      - ./infra/elk/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      # 파이프라인(처리 흐름) 설정 파일을 컨테이너 안에 넣습니다.
+      - ./infra/elk/logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports:
+      - "5044:5044"    # Filebeat가 로그를 보내는 포트
+    environment:
+      # JVM 메모리 제한: 학습용으로 256MB만 사용합니다.
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    depends_on:
+      - elasticsearch   # Elasticsearch가 먼저 실행되어야 로그를 저장할 수 있습니다.
+
+  # [열람실] Kibana: Elasticsearch에 저장된 로그를 브라우저에서 검색/시각화
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.0
+    container_name: kibana
+    environment:
+      # Kibana가 연결할 Elasticsearch 주소입니다.
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"    # 대시보드 포트 (http://localhost:5601 으로 접속)
+    depends_on:
+      - elasticsearch   # Elasticsearch가 먼저 실행되어야 합니다.
+
+  # [우편 배달부] Filebeat: Docker 컨테이너 로그 파일을 읽어서 Logstash로 전달
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.0
+    container_name: filebeat
+    # root 권한으로 실행: Docker 로그 파일(/var/lib/docker/containers/)을 읽으려면
+    # root 권한이 필요합니다.
+    user: root
+    volumes:
+      # Filebeat 설정 파일을 컨테이너 안에 넣습니다.
+      - ./infra/elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # Docker 로그 파일이 저장된 호스트 경로를 컨테이너에서 볼 수 있게 연결합니다.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Docker 소켓: 컨테이너 메타데이터(이름, 라벨 등)를 가져오기 위해 필요합니다.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - logstash         # Logstash가 먼저 실행되어야 로그를 보낼 수 있습니다.
+    restart: on-failure   # 실패 시 자동 재시작
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # [제18강] 중앙 집중 로깅 — B) Loki + Grafana Stack (비활성화)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # ELK 대안으로, 더 가볍고 설정이 간단한 로그 수집 시스템입니다.
+  # Grafana Labs에서 만들었으며, Prometheus와 함께 자주 사용됩니다.
+  #
+  # 사용하려면:
+  #   1. 아래 주석을 해제하고
+  #   2. 위의 ELK 서비스 4개(elasticsearch, logstash, kibana, filebeat)를 주석 처리하세요.
+  #
+  # 로그 수집 흐름:
+  #   서비스 stdout → Docker json-file → Promtail → Loki → Grafana
+  #
+  # 각 역할:
+  #   Promtail = 우편 배달부 (Docker 로그 파일을 읽어서 Loki로 전달)
+  #   Loki     = 도서관 (로그를 라벨 기반으로 저장, Elasticsearch보다 가벼움)
+  #   Grafana  = 열람실 (저장된 로그를 브라우저에서 검색/시각화)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  # # [로그 저장소] Loki: Prometheus 스타일의 경량 로그 수집 시스템
+  # loki:
+  #   image: grafana/loki:3.4.2
+  #   container_name: loki
+  #   volumes:
+  #     # Loki 설정 파일을 컨테이너 안에 넣습니다.
+  #     - ./infra/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+  #   ports:
+  #     - "3100:3100"    # Loki API 포트
+  #   command: -config.file=/etc/loki/local-config.yaml
+
+  # # [수집기] Promtail: Docker 로그를 읽어서 Loki로 전달 (Filebeat의 Loki 버전)
+  # promtail:
+  #   image: grafana/promtail:3.4.2
+  #   container_name: promtail
+  #   volumes:
+  #     # Promtail 설정 파일
+  #     - ./infra/loki/promtail-config.yml:/etc/promtail/config.yml:ro
+  #     # Docker 로그 파일 읽기 (ELK의 Filebeat와 같은 경로)
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     # Docker 소켓: 컨테이너 메타데이터 조회용
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   command: -config.file=/etc/promtail/config.yml
+  #   depends_on:
+  #     - loki
+
+  # # [대시보드] Grafana: Loki에 저장된 로그를 시각화 (Kibana의 대안)
+  # grafana:
+  #   image: grafana/grafana:11.5.2
+  #   container_name: grafana
+  #   environment:
+  #     # 익명 접근 허용: 로그인 없이 바로 대시보드에 접속할 수 있습니다 (학습용).
+  #     - GF_AUTH_ANONYMOUS_ENABLED=true
+  #     - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+  #   volumes:
+  #     # Loki 데이터소스를 자동으로 등록하는 설정 파일입니다.
+  #     - ./infra/loki/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+  #   ports:
+  #     - "3000:3000"    # 대시보드 포트 (http://localhost:3000)
+  #   depends_on:
+  #     - loki
+
   # # 서비스 이름: postgres-db
   # postgres-db:
   #   # 사용할 이미지: PostgreSQL 15 버전 박스를 가져와라
@@ -106,3 +257,11 @@ services:
   #   # 4. 통로 연결 (Port): 외부(내 컴퓨터)의 5432번 통로와 컨테이너 안의 5432번 통로를 연결
   #   ports:
   #     - "5432:5432"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [볼륨 선언] 컨테이너가 삭제되어도 데이터가 유지되는 영구 저장소
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+volumes:
+  # Elasticsearch 로그 데이터를 영구 보존합니다.
+  # docker-compose down 후 다시 up 해도 기존 로그가 남아있습니다.
+  elasticsearch-data:

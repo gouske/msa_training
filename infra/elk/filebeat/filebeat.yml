@@ -1,0 +1,42 @@
+# ============================================================
+# [Filebeat 설정] Docker 컨테이너 로그 자동 수집기
+# ============================================================
+# Filebeat는 로그 파일을 실시간으로 읽어서(tail)
+# Logstash 또는 Elasticsearch로 전달하는 경량 수집기입니다.
+#
+# 역할: Docker가 저장한 컨테이너 로그 파일 → Logstash로 전달
+# 흐름: /var/lib/docker/containers/*/*.log → Filebeat → Logstash:5044
+# ============================================================
+
+# --- 로그 수집 대상 설정 ---
+filebeat.inputs:
+  # Docker 컨테이너의 stdout/stderr 로그를 자동으로 수집합니다.
+  - type: container
+    paths:
+      # Docker가 컨테이너 로그를 저장하는 기본 경로입니다.
+      # 각 컨테이너마다 고유 ID 폴더 아래에 *-json.log 파일이 생깁니다.
+      # 예: /var/lib/docker/containers/abc123.../abc123...-json.log
+      - /var/lib/docker/containers/*/*.log
+
+    # Docker json-file 드라이버의 JSON 구조를 파싱합니다.
+    # Docker는 {"log":"실제 메시지","stream":"stdout","time":"..."} 형태로 저장합니다.
+    json.keys_under_root: true   # JSON 키를 최상위 필드로 올립니다
+    json.add_error_key: true     # JSON 파싱 실패 시 error 필드를 추가합니다
+
+# --- Docker 메타데이터 자동 추가 ---
+# 컨테이너 이름, 이미지, 라벨 등을 로그에 자동으로 붙여줍니다.
+# 이를 통해 Kibana에서 "어떤 서비스의 로그인지" 필터링할 수 있습니다.
+processors:
+  - add_docker_metadata:
+      # Docker 소켓을 통해 컨테이너 정보를 조회합니다.
+      host: "unix:///var/run/docker.sock"
+
+# --- 전달 대상: Logstash ---
+# Filebeat가 수집한 로그를 Logstash의 5044 포트로 보냅니다.
+# Logstash에서 필터링/가공 후 Elasticsearch에 저장됩니다.
+output.logstash:
+  hosts: ["logstash:5044"]
+
+# --- Filebeat 자체 로그 레벨 ---
+# info: 일반 동작 로그만 출력 (debug로 바꾸면 상세 로그 출력)
+logging.level: info

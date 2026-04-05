@@ -1,0 +1,39 @@
+# ============================================================
+# [Promtail 설정] Docker 로그 → Loki 전달 에이전트
+# ============================================================
+# Promtail은 Loki 전용 로그 수집 에이전트입니다.
+# ELK에서 Filebeat가 하는 역할을 Loki 생태계에서는 Promtail이 합니다.
+#
+# 역할: Docker 컨테이너 로그 파일을 읽어서 Loki로 전송
+# 흐름: /var/lib/docker/containers/*/*.log → Promtail → Loki:3100
+# ============================================================
+
+server:
+  http_listen_port: 9080       # Promtail 상태 확인용 포트 (헬스 체크)
+
+# Loki 서버 주소: 수집한 로그를 여기로 보냅니다.
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+# 읽기 위치 기록 파일
+# Promtail이 "어디까지 읽었는지" 기억하는 파일입니다.
+# 재시작 시 이미 읽은 부분을 건너뛰고 이어서 수집합니다.
+positions:
+  filename: /tmp/positions.yaml
+
+# 로그 수집 대상 설정
+scrape_configs:
+  # Docker 컨테이너 로그를 자동 탐색합니다.
+  - job_name: docker
+    static_configs:
+      - targets:
+          - localhost              # 로컬 머신의 로그를 수집
+        labels:
+          job: docker              # 이 수집 작업의 이름 (Grafana에서 필터링용)
+          __path__: /var/lib/docker/containers/*/*.log  # Docker 로그 파일 경로
+
+    # 파이프라인 단계: 로그를 가공하는 처리 흐름입니다.
+    pipeline_stages:
+      # Docker json-file 형식을 자동 파싱합니다.
+      # {"log":"실제 메시지","stream":"stdout","time":"..."} → 메시지만 추출
+      - docker: {}

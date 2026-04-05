@@ -1,0 +1,45 @@
+# ============================================================
+# [Loki 설정] 경량 로그 수집 서버
+# ============================================================
+# Loki는 Grafana Labs에서 만든 로그 수집 시스템으로,
+# Elasticsearch보다 훨씬 가볍고 설정이 간단합니다.
+#
+# 핵심 차이점:
+#   - Elasticsearch: 로그 내용 전체를 인덱싱 (전문 검색 가능, 리소스 많이 사용)
+#   - Loki: 라벨(label)만 인덱싱 (가볍지만, 로그 내용 검색은 느림)
+#
+# Prometheus가 메트릭(숫자)을 라벨로 관리하듯,
+# Loki는 로그(텍스트)를 라벨로 관리합니다.
+# ============================================================
+
+# 인증을 사용하지 않습니다 (학습 환경).
+# 운영 환경에서는 반드시 true로 설정해야 합니다.
+auth_enabled: false
+
+server:
+  # Loki API가 요청을 받을 포트입니다.
+  # Promtail이 이 포트로 로그를 전송하고, Grafana가 이 포트로 로그를 조회합니다.
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki                          # Loki 데이터 저장 기본 경로
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks          # 로그 데이터(청크) 저장 경로
+      rules_directory: /loki/rules            # 알림 규칙 저장 경로
+  replication_factor: 1                       # 복제본 수 (학습용이므로 1개)
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory                         # 인메모리 KV 저장소 (학습용, 가벼움)
+
+# 스키마 설정: Loki가 로그 인덱스를 어떤 형식으로 저장할지 정의합니다.
+schema_config:
+  configs:
+    - from: 2020-10-24                        # 이 날짜부터 적용되는 스키마 버전
+      store: tsdb                             # 시계열 DB 형태로 인덱스 저장
+      object_store: filesystem                # 로컬 파일시스템에 저장
+      schema: v13                             # 최신 스키마 버전
+      index:
+        prefix: index_                        # 인덱스 파일 접두사
+        period: 24h                           # 24시간 단위로 인덱스 분리
