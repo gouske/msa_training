@@ -34,6 +34,16 @@ class JwtTokenProviderTest {
         secretKeyStringField.isAccessible = true
         secretKeyStringField.set(jwtTokenProvider, testSecret)
 
+        // [제20강 추가] issuer, audience 필드도 리플렉션으로 설정
+        // @Value("\${jwt.issuer:msa-auth-service}")로 주입되는 값을 직접 설정합니다.
+        val issuerField = JwtTokenProvider::class.java.getDeclaredField("issuer")
+        issuerField.isAccessible = true
+        issuerField.set(jwtTokenProvider, "msa-auth-service")
+
+        val audienceField = JwtTokenProvider::class.java.getDeclaredField("audience")
+        audienceField.isAccessible = true
+        audienceField.set(jwtTokenProvider, "msa-gateway")
+
         // @PostConstruct init()을 수동으로 호출하여 secretKey 초기화
         jwtTokenProvider.init()
     }

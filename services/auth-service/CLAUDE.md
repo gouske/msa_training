@@ -41,6 +41,8 @@ spring.datasource:
   password: mypassword
 jpa.hibernate.ddl-auto: update  # 시작 시 스키마 자동 생성
 jwt.secret: ${JWT_SECRET_KEY:default-local-test-key-1234567890}
+jwt.issuer: ${JWT_ISSUER:msa-auth-service}
+jwt.audience: ${JWT_AUDIENCE:msa-gateway}
 ```
 
 **Docker 환경 변수**

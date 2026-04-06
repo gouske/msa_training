@@ -21,6 +21,9 @@ spring:
 jwt:
   # ${이름:기본값}은 "이 이름의 환경변수가 있으면 쓰고, 없으면 기본값을 써"라는 뜻입니다.
   secret: ${JWT_SECRET_KEY:default-local-test-key-1234567890}
+  # [제20강 추가] JWT 발급자(issuer)와 대상(audience) — Gateway가 이 값을 검증합니다.
+  issuer: ${JWT_ISSUER:msa-auth-service}
+  audience: ${JWT_AUDIENCE:msa-gateway}
 
 logging:
   level:

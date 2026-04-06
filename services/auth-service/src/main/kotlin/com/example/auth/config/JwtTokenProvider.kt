@@ -21,6 +21,14 @@ class JwtTokenProvider {
     @Value("\${jwt.secret}")
     private lateinit var secretKeyString: String
 
+    // [제20강 추가] JWT에 포함할 발급자(issuer)와 대상(audience) 정보
+    // Gateway가 이 값을 검증하여 다른 시스템에서 발급한 토큰을 거부합니다.
+    @Value("\${jwt.issuer:msa-auth-service}")
+    private lateinit var issuer: String
+
+    @Value("\${jwt.audience:msa-gateway}")
+    private lateinit var audience: String
+
     private lateinit var secretKey: Key // java.security.Key
     // 2. 토큰을 암호화할 때 쓸 '비밀 도장'입니다. 실무에선 환경 변수로 숨겨야 합니다.
 //    private val secretKey = Keys.secretKeyFor(SignatureAlgorithm.HS256)
@@ -44,6 +52,8 @@ class JwtTokenProvider {
 
         return Jwts.builder()
             .subject(email) // .setSubject() 대신 .subject()로 더 간결해졌습니다.
+            .issuer(issuer)   // [제20강 추가] 발급자: 이 토큰을 누가 만들었는지 표시
+            .audience().add(audience).and() // [제20강 추가] 대상: 이 토큰을 누가 사용할지 표시
             .issuedAt(now)
             .expiration(validity)
             .signWith(secretKey) // 최신 버전은 알고리즘을 생략해도 key를 보고 알아서 판단합니다.
