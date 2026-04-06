@@ -25,6 +25,12 @@ from pydantic import BaseModel
 ORDER_SERVICE_URL = os.getenv("ORDER_SERVICE_URL", "http://localhost:8081")
 # RabbitMQ 호스트: Docker 환경에서는 서비스 이름 'rabbitmq', 로컬 실행 시 'localhost'
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
+# [제20강 추가] 서비스 간 통신용 내부 API 키
+# Order Service 콜백 호출 시 X-Internal-Key 헤더에 이 값을 포함해야 합니다.
+# [핫픽스] 기본값 fallback 제거 — 환경변수 미설정 시 즉시 에러로 누락을 방지합니다.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+if not INTERNAL_API_KEY:
+    raise RuntimeError("INTERNAL_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RabbitMQ Consumer (비동기 결제 처리)
@@ -42,6 +48,13 @@ def on_order_message(ch, method, properties, body):
     """
     order_queue에서 메시지를 수신했을 때 실행되는 콜백 함수입니다.
     흐름: 메시지 수신 → 결제 처리 → Order Service에 결과 콜백
+
+    [제21강 변경] 수동 ACK/NACK으로 변경
+    이전: 메시지 수신 즉시 자동 ACK → 콜백 실패 시 메시지 유실 → 주문 영구 PENDING
+    이후: 콜백 성공(2xx) 시에만 ACK, 실패 시 NACK → 메시지가 DLQ로 이동하여 나중에 재처리 가능
+
+    ACK(Acknowledge): "이 메시지를 잘 처리했어!" → RabbitMQ가 큐에서 삭제
+    NACK(Negative Acknowledge): "이 메시지 ���리에 실패했어!" → DLQ로 이동
     """
     # body는 bytes 타입이므로 JSON으로 파싱합니다.
     order_data = json.loads(body)
@@ -52,16 +65,41 @@ def on_order_message(ch, method, properties, body):
     payment_status = process_payment(order_data)
 
     # Order Service에 결제 결과를 HTTP POST로 알려줍니다.
-    # [서비스 간 통신] Consumer(비동기 수신자)가 처리 결과를 원래 서비스에 콜백하는 패턴
     try:
         callback_url = f"{ORDER_SERVICE_URL}/api/order/callback"
-        requests.post(callback_url, json={
+        response = requests.post(callback_url, json={
             "orderId": order_id,
             "paymentStatus": payment_status
-        }, timeout=5)  # timeout: 콜백 응답을 최대 5초만 기다립니다.
-        print(f"✅ 주문 상태 업데이트 콜백 완료: {order_id} → {payment_status}")
+        }, headers={
+            "X-Internal-Key": INTERNAL_API_KEY
+        }, timeout=5)
+
+        # [핫픽스] 응답 코드별 ACK/NACK 분기
+        # 이전: raise_for_status()로 모든 비-2xx를 NACK → 409(이미 처리됨)도 DLQ로 이동
+        # 이후: 409는 "이미 처리 완료"이므로 ACK (DLQ 오염 방지)
+        status_code = response.status_code
+
+        if 200 <= status_code < 300:
+            # 정상 처리 완료 → ACK
+            print(f"✅ 주문 상태 업데이트 콜백 완료: {order_id} → {payment_status}")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        elif status_code == 409:
+            # 이미 처리된 주문 (멱등 응답) → ACK로 처리 (재시도해도 결과 동일)
+            # DLQ에 보내지 않습니다 — 이것은 장애가 아니라 정상적인 중복 요청입니다.
+            print(f"⚠️ 이미 처리된 주문 (409): {order_id} — ACK 처리")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        else:
+            # 그 외 4xx/5xx 에러 → NACK → DLQ로 이동
+            print(f"🚨 Order Service 콜백 실패 (HTTP {status_code}): {order_id}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
     except Exception as e:
-        print(f"🚨 Order Service 콜백 실패: {e}")
+        print(f"🚨 Order Service 콜백 예외: {e}")
+
+        # 네트워크 오류, 타임아웃 등 → NACK → DLQ로 이동
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 def start_consumer():
     """
@@ -81,17 +119,29 @@ def start_consumer():
             )
             channel = connection.channel()
 
-            # 큐 선언 - producer(order-service)와 동일한 설정으로 맞춰야 합니다.
-            # durable: true → RabbitMQ 재시작 시에도 큐가 유지됩니다.
-            channel.queue_declare(queue='order_queue', durable=True)
+            # [제21강 추가] DLQ(Dead Letter Queue) 선언
+            # 처리에 실패한 메시지가 이동하는 "실패 보관함"입니다.
+            # 운영자가 나중에 RabbitMQ 관리 대시보드에서 확인하거나 재처리할 수 있습니다.
+            channel.queue_declare(queue='order_dlq', durable=True)
 
-            # basic_consume: 큐에 메시지가 도착하면 on_order_message를 호출하도록 등록합니다.
-            # auto_ack=True: 메시지 수신 즉시 자동으로 확인 응답을 보냅니다.
-            #   (처리 실패 시 재처리가 필요하다면 auto_ack=False + ch.basic_ack()를 사용)
+            # [제21강 변경] 큐 선언 시 DLQ 연결 설정 추가
+            # 이전: channel.queue_declare(queue='order_queue', durable=True)
+            # 이후: arguments로 DLQ를 연결하여 NACK된 메시지가 자동으로 order_dlq로 이동
+            #
+            # x-dead-letter-exchange: '' (빈 문자열) = RabbitMQ 기본 exchange 사용
+            # x-dead-letter-routing-key: 'order_dlq' = 실패 메시지를 order_dlq 큐로 라우팅
+            channel.queue_declare(queue='order_queue', durable=True, arguments={
+                'x-dead-letter-exchange': '',
+                'x-dead-letter-routing-key': 'order_dlq'
+            })
+
+            # [제21강 변경] auto_ack=False → 수동 ACK/NACK
+            # 이전: auto_ack=True → 메시지 수신 즉시 삭제 → 처리 실패해도 복구 불가
+            # 이후: auto_ack=False → on_order_message에서 명시적으로 ACK/NACK 호출
             channel.basic_consume(
                 queue='order_queue',
                 on_message_callback=on_order_message,
-                auto_ack=True
+                auto_ack=False  # 수동 ACK: 처리 완료를 직접 알려야 합니다
             )
 
             print(' [*] 결제 서비스: RabbitMQ 메시지 대기 중...')

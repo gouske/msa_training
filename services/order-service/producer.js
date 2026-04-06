@@ -27,11 +27,30 @@ async function sendOrderMessage(orderData) {
     //    실제 메시지 송수신은 connection이 아닌 channel을 통해 이루어집니다.
     const channel = await connection.createChannel();
 
+    // [제21강 추가] DLQ(Dead Letter Queue) 선언
+    // 처리에 실패한 메시지가 이동하는 "실패 보관함"입니다.
+    // Consumer(payment-service)의 큐 선언과 동일하게 맞춰야 합니다.
+    await channel.assertQueue('order_dlq', { durable: true });
+
     // 3. 큐(우체통) 선언
     //    assertQueue: 큐가 없으면 생성, 있으면 기존 큐를 그대로 사용합니다.
     //    durable: true → RabbitMQ가 재시작되어도 큐 정의가 유지됩니다. (메시지 유실 방지)
+    //
+    // [제21강 변경] DLQ 연결 arguments 추가
+    // 이전: await channel.assertQueue(queue, { durable: true });
+    // 이후: arguments로 NACK된 메시지가 order_dlq로 이동하도록 설정
+    //
+    // 주의: 기존에 arguments 없이 선언된 order_queue가 이미 있으면
+    //       RabbitMQ가 속성 충돌 오류를 발생시킵니다.
+    //       이 경우 docker-compose down -v로 볼륨을 삭제하고 재시작하세요.
     const queue = 'order_queue';
-    await channel.assertQueue(queue, { durable: true });
+    await channel.assertQueue(queue, {
+        durable: true,
+        arguments: {
+            'x-dead-letter-exchange': '',            // 기본 exchange 사용
+            'x-dead-letter-routing-key': 'order_dlq' // 실패 메시지 → order_dlq
+        }
+    });
 
     // 4. 메시지 발행
     //    JSON 객체 → 문자열 직렬화 → Buffer(이진 데이터)로 변환하여 큐에 넣습니다.

@@ -13,6 +13,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 import pytest
+import requests  # [제21강 추가] HTTPError 예외 클래스를 사용하기 위해 import
 from fastapi.testclient import TestClient
 
 # FastAPI 앱을 import합니다.
@@ -146,40 +147,49 @@ class TestOnOrderMessage:
     """RabbitMQ 메시지 콜백 함수 테스트"""
 
     @patch("main.requests.post")
-    def test_successful_message_processing(self, mock_post):
-        """정상 메시지 수신 시 결제 처리 후 Order Service에 콜백하는지 확인"""
-        # GIVEN: RabbitMQ에서 수신한 메시지 (bytes)
+    def test_successful_message_sends_ack(self, mock_post):
+        """
+        정상 메시지 수신 시 콜백 전송 후 ACK를 보내는지 확인
+
+        [제21강 변경] basic_ack 호출 검증 추가
+        이전: 콜백 전송만 확인
+        이후: 콜백 전송 + ACK 호출까지 확인 (메시지가 큐에서 안전하게 제거됨)
+        """
         message_body = json.dumps({
             "orderId": "order-msg-001",
             "amount": 30000,
             "userEmail": "user@test.com"
         }).encode()
 
-        # mock channel, method, properties (pika 콜백 파라미터)
         mock_ch = MagicMock()
         mock_method = MagicMock()
-        mock_properties = MagicMock()
+        # delivery_tag: RabbitMQ가 각 메시지에 부여한 고유 번호표
+        mock_method.delivery_tag = 1
 
-        # WHEN: 메시지 콜백 실행
-        on_order_message(mock_ch, mock_method, mock_properties, message_body)
+        # [핫픽스] mock_post의 반환값에 status_code 설정 (응답코드 분기 로직 지원)
+        mock_post.return_value.status_code = 200
 
-        # THEN: Order Service에 콜백 요청이 전송됨
+        on_order_message(mock_ch, mock_method, MagicMock(), message_body)
+
+        # 콜백 전송 확인
         mock_post.assert_called_once()
-        call_args = mock_post.call_args
-
-        # 콜백 URL 확인
-        assert "/api/order/callback" in call_args[0][0] or \
-               "/api/order/callback" in str(call_args)
-
-        # 콜백 본문에 orderId와 paymentStatus가 포함되는지 확인
-        callback_data = call_args[1]["json"]
+        callback_data = mock_post.call_args[1]["json"]
         assert callback_data["orderId"] == "order-msg-001"
         assert callback_data["paymentStatus"] == "COMPLETED"
 
+        # [제21강 추가] ACK 호출 확인 — 메시지 처리 완료
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=1)
+        mock_ch.basic_nack.assert_not_called()
+
     @patch("main.requests.post")
-    def test_callback_failure_does_not_crash(self, mock_post):
-        """Order Service 콜백 실패 시 consumer가 멈추지 않는지 확인"""
-        # GIVEN: 콜백 요청이 예외를 던짐 (Order Service 다운)
+    def test_callback_failure_sends_nack(self, mock_post):
+        """
+        콜백 실패 시 NACK을 보내 메시지가 DLQ로 이동하는지 확인
+
+        [제21강 변경] crash 미발생 테스트 → NACK 호출 검증으로 강화
+        이전: "crash 없이 성공"만 확인
+        이후: basic_nack(requeue=False) 호출 확인 → 메시지가 DLQ로 이동
+        """
         mock_post.side_effect = Exception("Connection refused")
 
         message_body = json.dumps({
@@ -188,10 +198,69 @@ class TestOnOrderMessage:
             "userEmail": "fail@test.com"
         }).encode()
 
-        # WHEN & THEN: 예외가 발생해도 함수가 정상 종료됨 (crash 없음)
-        # on_order_message 내부에서 try-except로 처리되므로 예외가 전파되지 않아야 합니다.
-        on_order_message(MagicMock(), MagicMock(), MagicMock(), message_body)
-        # 여기까지 도달하면 crash 없이 성공
+        mock_ch = MagicMock()
+        mock_method = MagicMock()
+        mock_method.delivery_tag = 2
+
+        on_order_message(mock_ch, mock_method, MagicMock(), message_body)
+
+        # NACK 호출 확인 (메시지 → DLQ)
+        mock_ch.basic_nack.assert_called_once_with(delivery_tag=2, requeue=False)
+        mock_ch.basic_ack.assert_not_called()
+
+    @patch("main.requests.post")
+    def test_callback_409_sends_ack(self, mock_post):
+        """
+        [핫픽스] 콜백 응답이 409(이미 처리됨)일 때 ACK를 보내는지 확인
+
+        409는 "이미 처리된 주문"을 의미하므로 장애가 아닌 정상적인 중복 요청입니다.
+        DLQ에 보내면 실제 장애와 구분이 안 되므로 ACK로 처리합니다.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 409  # 이미 처리됨
+        mock_post.return_value = mock_response
+
+        message_body = json.dumps({
+            "orderId": "order-duplicate",
+            "amount": 15000,
+            "userEmail": "dup@test.com"
+        }).encode()
+
+        mock_ch = MagicMock()
+        mock_method = MagicMock()
+        mock_method.delivery_tag = 4
+
+        on_order_message(mock_ch, mock_method, MagicMock(), message_body)
+
+        # 409는 ACK 처리 (DLQ로 보내지 않음)
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=4)
+        mock_ch.basic_nack.assert_not_called()
+
+    @patch("main.requests.post")
+    def test_callback_http_500_sends_nack(self, mock_post):
+        """
+        [핫픽스] 콜백 HTTP 응답이 500일 때 NACK을 보내는지 확인
+
+        5xx는 서버 오류이므로 DLQ로 보내 나중에 재처리합니다.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 500  # 서버 오류
+        mock_post.return_value = mock_response
+
+        message_body = json.dumps({
+            "orderId": "order-http-err",
+            "amount": 20000,
+            "userEmail": "err@test.com"
+        }).encode()
+
+        mock_ch = MagicMock()
+        mock_method = MagicMock()
+        mock_method.delivery_tag = 3
+
+        on_order_message(mock_ch, mock_method, MagicMock(), message_body)
+
+        mock_ch.basic_nack.assert_called_once_with(delivery_tag=3, requeue=False)
+        mock_ch.basic_ack.assert_not_called()
 
 
 # ==========================================================
