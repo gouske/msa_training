@@ -26,35 +26,37 @@ node index.js  # 실행
 | GET | `/api/order/health` | 헬스 체크 |
 
 **POST /api/order**
-- 요청 헤더: `Authorization: Bearer {token}`
+- 인증: Gateway가 JWT를 검증하고 `X-User-Email` 헤더로 이메일을 전달
 - 요청 바디: `{itemId, quantity, price}`
 - 응답: `202 Accepted` `{message, orderId, status: "PENDING"}`
 - 결제는 백그라운드에서 RabbitMQ를 통해 비동기로 처리됨
 
 **POST /api/order/callback** (내부 전용)
+- 인증: `X-Internal-Key` 헤더로 내부 API 키 검증 (제20강)
 - Payment Service가 결제 완료 후 호출
+- 요청 헤더: `X-Internal-Key: {INTERNAL_API_KEY}`
 - 요청 바디: `{orderId, paymentStatus}`
-- 주문 상태를 `PENDING → SUCCESS / FAILED`로 업데이트
+- 상태 전이 규칙: `PENDING → SUCCESS / FAILED`만 허용, 종결 상태 변경 시 409 (제22강)
+- 유효하지 않은 paymentStatus 시 400
 
 ## 주문 생성 흐름 (비동기 방식)
 
 ```
-1. Authorization 헤더에서 JWT 추출
-2. GET http://{AUTH_HOST}:8080/api/auth/validate  →  {valid, email}
-3. MongoDB에 주문 저장 (status: "PENDING")
-4. RabbitMQ order_queue에 메시지 발행 (producer.js)
-5. 즉시 202 Accepted 반환 (클라이언트가 기다리지 않음)
+1. X-User-Email 헤더에서 이메일 읽기 (Gateway가 JWT 검증 후 주입)
+2. MongoDB에 주문 저장 (status: "PENDING")
+3. RabbitMQ order_queue에 메시지 발행 (producer.js)
+4. 즉시 202 Accepted 반환 (클라이언트가 기다리지 않음)
 
 [백그라운드]
-6. Payment Service가 큐에서 메시지를 꺼내 결제 처리
-7. POST /api/order/callback 호출 → 주문 상태 업데이트 (SUCCESS/FAILED)
+5. Payment Service가 큐에서 메시지를 꺼내 결제 처리
+6. POST /api/order/callback 호출 → 주문 상태 업데이트 (SUCCESS/FAILED)
 ```
 
 ## Order 스키마 (MongoDB)
 
 ```javascript
 {
-  userEmail: String,   // Auth Service에서 받은 이메일
+  userEmail: String,   // Gateway가 X-User-Email 헤더로 전달한 이메일
   itemId:    String,
   quantity:  Number,
   price:     Number,
@@ -68,31 +70,17 @@ node index.js  # 실행
 | 변수 | 로컬 기본값 | Docker 값 |
 |------|------------|-----------|
 | `MONGO_URI` | `mongodb://localhost:27017/order_db` | `mongodb://order-db:27017/order_db` |
-| `AUTH_HOST` | `localhost` | `auth-service` |
-| `PAYMENT_HOST` | `localhost` | `payment-service` |
 | `RABBITMQ_URL` | `amqp://localhost` | `amqp://rabbitmq` |
+| `INTERNAL_API_KEY` | `msa-training-internal-key-2026` | 동일 (Payment Service와 공유) |
 
-## 서킷 브레이커 (Circuit Breaker)
+## 서킷 브레이커 (비활성화)
 
-Auth Service 호출에 `opossum` 라이브러리 기반 서킷 브레이커 적용 (제17강).
-
-| 상태 | 설명 |
-|------|------|
-| CLOSED | 정상. Auth Service 직접 호출 |
-| OPEN | 차단 중. fallback 즉시 반환 (503) |
-| HALF-OPEN | 회복 시도. 테스트 요청 1건 통과 |
-
-**설정값** (`circuitBreaker.js`):
-- `timeout`: 3000ms — Auth Service 응답 제한 시간
-- `errorThresholdPercentage`: 50 — 실패율 50% 초과 시 OPEN 전환
-- `resetTimeout`: 10000ms — OPEN 상태에서 10초 후 HALF-OPEN 전환
-- `volumeThreshold`: 3 — 최소 3번 요청 후 통계 적용
-
-**CB 상태 확인**: `GET /api/order/health` 응답의 `authCircuitBreaker` 필드
+제17강에서 Auth Service 호출 보호용으로 도입했으나, 제19강에서 Gateway 중앙 JWT 인증으로 전환하면서 사용 중단됨.
+`circuitBreaker.js` 파일은 학습 참고용으로 보존. `index.js`에서 import하지 않으므로 실행되지 않음.
 
 ## 핵심 파일
 
-- `index.js` — 메인 Express 앱 (라우팅 + 서비스 간 호출 로직)
-- `circuitBreaker.js` — Auth Service 보호용 서킷 브레이커 모듈 (opossum)
+- `index.js` — 메인 Express 앱 (라우팅 + X-User-Email 헤더 읽기)
 - `producer.js` — RabbitMQ 메시지 발행 모듈 (order_queue에 주문 데이터 전송)
 - `models/Order.js` — MongoDB 스키마 정의
+- `circuitBreaker.js` — (비활성화) Auth Service 보호용 서킷 브레이커 (제17강 학습 참고용)
