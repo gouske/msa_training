@@ -17,6 +17,10 @@ services:
       ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address: http://auth-service:8080/api/
       ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address: http://order-service:8081/api/
       ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address: http://payment-service:8082/api/
+      # [제19강 추가] Gateway가 JWT 토큰을 검증할 때 사용하는 비밀 키
+      # Auth Service의 jwt.secret(application.yml)과 동일한 값이어야 합니다.
+      # __는 .NET의 계층 구분자입니다: Jwt__SecretKey → appsettings.json의 Jwt.SecretKey를 오버라이드
+      Jwt__SecretKey: ${JWT_SECRET_KEY:-default-local-test-key-1234567890}
     # [제18강] 서비스 식별 라벨 — Filebeat/Promtail이 이 라벨로 서비스를 구분합니다.
     labels:
       service: "gateway-service"
@@ -35,6 +39,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://auth-db:5432/auth_db
       SPRING_DATASOURCE_USERNAME: myuser
       SPRING_DATASOURCE_PASSWORD: mypassword
+      # [제19강 수정] Gateway와 동일한 JWT 비밀 키를 사용하도록 환경 변수 동기화
+      # application.yml의 ${JWT_SECRET_KEY:default-local-test-key-1234567890}에 주입됩니다.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-default-local-test-key-1234567890}
     labels:
       service: "auth-service"
     depends_on:
@@ -43,14 +50,19 @@ services:
   # 3. 주문 (Node.js)
   order-service:
     build: ./services/order-service
-    ports:
-      - "8081:8081"
+    # [제20강 변경] 호스트 포트 노출 제거 — Gateway 경유만 허용
+    # 이전: ports: - "8081:8081" (외부에서 직접 접근 가능 → 보안 취약)
+    # 변경: 포트 매핑 없음 (Docker 내부 네트워크에서만 접근 가능)
+    # 디버깅이 필요하면 일시적으로 포트를 다시 열 수 있습니다.
     environment:
       MONGO_URI: mongodb://order-db:27017/order_db
       AUTH_HOST: auth-service
       PAYMENT_HOST: payment-service
       # [비동기 메시징] RabbitMQ 연결 주소. 'rabbitmq'는 아래 서비스 이름과 일치해야 합니다.
       RABBITMQ_URL: amqp://rabbitmq
+      # [제20강 추가] 서비스 간 통신용 내부 API 키
+      # Payment Service가 콜백을 보낼 때 이 키를 X-Internal-Key 헤더에 포함합니다.
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-msa-training-internal-key-2026}
     labels:
       service: "order-service"
     depends_on:
@@ -61,8 +73,8 @@ services:
   # 4. 결제 (python)
   payment-service:
     build: ./services/payment-service
-    ports:
-      - "8082:8082"
+    # [제20강 변경] 호스트 포트 노출 제거 — Gateway 경유만 허용
+    # 이전: ports: - "8082:8082"
     environment:
       # Python에게 "버퍼 쓰지 말고 즉시 출력하라"고 지시함
       PYTHONUNBUFFERED: "1"
@@ -70,6 +82,8 @@ services:
       RABBITMQ_HOST: rabbitmq
       # Order Service 콜백 주소 (결제 완료 후 주문 상태 업데이트)
       ORDER_SERVICE_URL: http://order-service:8081
+      # [제20강 추가] 서비스 간 통신용 내부 API 키 (Order Service와 동일한 값)
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-msa-training-internal-key-2026}
     labels:
       service: "payment-service"
     depends_on:

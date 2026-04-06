@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 테스트 프로젝트임을 명시 (NuGet 패키지로 배포하지 않음) -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- xUnit: .NET 생태계에서 가장 널리 쓰이는 테스트 프레임워크
+         [Fact], [Theory] 등의 어트리뷰트로 테스트 메서드를 표시합니다. -->
+    <PackageReference Include="xunit" Version="2.6.2" />
+
+    <!-- xunit.runner.visualstudio: dotnet test 명령이 xUnit 테스트를 찾아 실행할 수 있게 연결합니다. -->
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.4" />
+
+    <!-- Microsoft.NET.Test.Sdk: dotnet test 인프라의 핵심.
+         테스트 호스트 프로세스를 관리합니다. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+
+    <!-- WebApplicationFactory: 실제 HTTP 서버 없이 ASP.NET Core 앱을 테스트합니다.
+         Program.cs의 전체 미들웨어 파이프라인을 메모리 안에서 실행합니다. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.11" />
+
+    <!-- System.IdentityModel.Tokens.Jwt: 테스트에서 JWT 토큰을 직접 생성할 때 사용합니다.
+         실제 Auth Service 없이 유효한/만료된/잘못된 서명의 토큰을 만들 수 있습니다. -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 테스트 대상 프로젝트 참조: GatewayService의 Program 클래스에 접근합니다. -->
+    <ProjectReference Include="../GatewayService/GatewayService.csproj" />
+  </ItemGroup>
+
+</Project>

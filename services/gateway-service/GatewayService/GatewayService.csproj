@@ -7,7 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- [기존] YARP 리버스 프록시 라이브러리 -->
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+    <!-- [제19강 추가] ASP.NET Core JWT Bearer 인증 미들웨어
+         이 패키지가 Authorization: Bearer {토큰} 헤더를 자동으로 파싱하고 검증합니다. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.13" />
+  </ItemGroup>
+
+  <!-- [제19강 추가] 테스트 프로젝트(GatewayService.Tests)에서
+       Program 클래스에 접근할 수 있도록 허용합니다.
+       top-level statements로 작성된 Program.cs는 기본적으로 internal이므로
+       테스트에서 WebApplicationFactory<Program>을 쓰려면 이 설정이 필요합니다. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="GatewayService.Tests" />
   </ItemGroup>
 
 </Project>
