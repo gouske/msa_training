@@ -25,5 +25,10 @@ obj/
 .DS_Store
 *.swp
 
+# Claude Code
+.claude/cache/
+.claude/*.log 
+.claude/settings.local.json
+
 # ETC
 docs/

@@ -1,85 +1,49 @@
-# CLAUDE.md
+# 프로젝트 공통 가이드
 
-이 파일은 Claude Code(claude.ai/code)가 이 저장소에서 작업할 때 참고하는 가이드입니다.
+이 파일은 모든 작업에서 항상 적용되는 프로젝트 가이드입니다.
+(루트 `CLAUDE.md` / `AGENTS.md` 는 동일 내용으로 유지됩니다.)
+특정 서비스에서 작업할 때는 해당 `services/{name}/CLAUDE.md` 도 함께 참고하세요.
 
-## Language
-- 모든 응답과 코드 리뷰는 한국어로 작성할 것
-- 코드 주석과 커밋 메시지는 한글을 기본으로 하고 필요한 부분만 영어를 허용함
+## 언어
+- 응답·문서·주석·커밋 메시지는 한국어 기본 (필요 시 영어 허용)
 
 ## 프로젝트 개요
+4개 마이크로서비스로 구성된 MSA 학습/포트폴리오 프로젝트.
 
-4개의 서비스를 서로 다른 기술 스택으로 구현한 MSA(마이크로서비스 아키텍처) 학습 프로젝트.
+| 서비스 | 스택 | 포트 | 가이드 |
+|--------|------|------|--------|
+| gateway-service | C# / .NET 8 + YARP | 9000 | services/gateway-service/CLAUDE.md |
+| auth-service | Kotlin + Spring Boot + PostgreSQL | 8080 | services/auth-service/CLAUDE.md |
+| order-service | Node.js + Express + MongoDB | 8081 | services/order-service/CLAUDE.md |
+| payment-service | Python + FastAPI | 8082 | services/payment-service/CLAUDE.md |
 
-| 서비스 | 기술 스택 | 포트 |
-|--------|----------|------|
-| gateway-service | C#/.NET 8 + YARP | 9000 |
-| auth-service | Kotlin + Spring Boot | 8080 |
-| order-service | Node.js + Express | 8081 |
-| payment-service | Python + FastAPI | 8082 |
-| rabbitmq | RabbitMQ 3 (management) | 5672 / 15672 |
-| elasticsearch | Elasticsearch 8.17.0 | 9200 |
-| logstash | Logstash 8.17.0 | 5044 |
-| kibana | Kibana 8.17.0 | 5601 |
-| filebeat | Filebeat 8.17.0 | - |
+- 진입점: `http://localhost:9000` (Gateway가 JWT 검증 후 백엔드로 라우팅)
+- Infra: PostgreSQL · MongoDB · RabbitMQ · ELK Stack
 
-## 전체 스택 실행
-
+## 빌드 / 실행
 ```bash
-docker-compose up          # 전체 서비스 시작
-docker-compose down        # 전체 서비스 중지
-docker-compose up --build  # 재빌드 후 시작
+docker-compose up --build   # 전체 스택 빌드 + 시작
+docker-compose down         # 중지 (볼륨 보존)
 ```
+서비스별 단독 실행·테스트 명령은 각 서비스의 `CLAUDE.md` 참조.
 
-RabbitMQ 관리 대시보드: `http://localhost:15672` (guest / guest)
+## ✅ 반드시 (Must)
+- **TDD**: 새 동작은 실패 테스트 작성 → 통과 → 리팩터링 순. **테스트 없는 PR 금지.**
+- **DDD**: 서비스마다 독립 바운디드 컨텍스트. 도메인 로직은 controller/route 밖(`service/`/`domain/`)에 둔다. 서비스 경계를 넘는 직접 DB 호출 금지.
+- **테스트 통과 후 커밋**: 수정 범위에 영향 받는 테스트를 통과시킨 뒤 커밋한다.
 
-## 아키텍처
+## ❌ 절대 금지 (Must Not)
+- **DB 데이터 삭제 금지** — 마이그레이션·시드 외 어떤 형태로도 운영/로컬 공유 DB 데이터를 임의 삭제하지 않는다. **`docker-compose down -v`(볼륨 삭제)는 사용자 명시 승인 후에만 실행.**
+- **`main` 브랜치 직접 push 금지** — 모든 변경은 `feat/*`·`fix/*`·`refactor/*` 등 feature 브랜치 → PR → 리뷰 → 머지로 진행. `git push origin main`, `git push --force` 금지.
+- **민감정보 커밋 금지** — `.env`, API 키, JWT 시크릿, DB 비밀번호 등은 절대 커밋하지 않는다. 새 환경 변수는 `.env.example`에 더미 값으로 등록하고 실제 값은 환경 변수로 주입.
+- **destructive 명령 사용자 승인 필수** — `rm -rf`, `git reset --hard`, `git push --force`, DB drop, `docker-compose down -v` 등은 사용자 확인 없이 실행하지 않는다.
 
-### 요청 라우팅 + JWT 인증
+## 환경 변수 / 공유 시크릿
+- `JWT_SECRET_KEY`: Auth Service ↔ Gateway 동일해야 함. 변경 시 양쪽 동시 갱신.
+- `INTERNAL_API_KEY`: Order Service ↔ Payment Service 동일해야 함. 변경 시 양쪽 동시 갱신.
+- 신규 환경 변수 추가 시 `.env.example`에 더미 값과 함께 추가.
 
-```
-클라이언트 → Gateway (포트 9000) → /auth/*    → auth-service:8080  (Anonymous)
-             JWT 검증 + 헤더 주입   → /order/*   → order-service:8081  (JWT 필요)
-                                 → /payment/* → payment-service:8082  (JWT 필요)
-```
-
-게이트웨이는 YARP를 사용해 경로의 첫 번째 세그먼트를 제거하고 각 서비스의 `/api/` 경로로 전달한다.
-Gateway가 JWT를 중앙 검증하고, 인증된 사용자 이메일을 `X-User-Email` 헤더로 백엔드에 전달한다.
-
-### 주문 생성 시 서비스 간 호출 흐름 (비동기)
-
-```
-POST /order (클라이언트, Authorization: Bearer {JWT})
-  → Gateway
-      1. JWT 검증 (비밀 키로 서명 확인)
-      2. X-User-Email 헤더 주입
-  → Order Service
-      3. X-User-Email 헤더에서 이메일 읽기
-      4. MongoDB에 주문 저장 (PENDING)
-      5. RabbitMQ order_queue에 메시지 발행
-      6. 202 Accepted 즉시 반환
-
-[백그라운드]
-  RabbitMQ → Payment Service (Consumer 스레드)
-      7. 결제 처리
-      8. POST order-service:8081/api/order/callback
-      9. 주문 상태 업데이트 → SUCCESS / FAILED
-```
-
-## 커밋 메시지 규칙
-
-한글로 작성하며 Conventional Commits 형식을 따른다.
-
-```
-feat(service): 기능 설명
-fix(service): 버그 수정 내용
-refactor(service): 리팩토링 내용
-```
-
-## 서비스별 상세 정보
-
-특정 서비스 작업 시 해당 서비스의 `CLAUDE.md`를 읽어 컨텍스트를 파악할 것.
-
-- **Gateway**: `services/gateway-service/CLAUDE.md`
-- **Auth**: `services/auth-service/CLAUDE.md`
-- **Order**: `services/order-service/CLAUDE.md`
-- **Payment**: `services/payment-service/CLAUDE.md`
+## 브랜치 / 커밋
+- 브랜치: `feat/*`, `fix/*`, `refactor/*`, `chore/*`, `docs/*`
+- 커밋 메시지: 한글 + Conventional Commits — 예: `feat(order): 주문 상태 전이 검증 추가`
+- PR은 단일 목적 단위, 작업 의도와 검증 방법을 본문에 명시.
