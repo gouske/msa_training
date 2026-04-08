@@ -1,4 +1,6 @@
 spring:
+  application:
+    name: auth-service
   datasource:
     # DB가 어디 있는지 주소를 적습니다 (내 컴퓨터의 5432번 포트)
     url: jdbc:postgresql://localhost:5432/auth_db
@@ -24,6 +26,12 @@ jwt:
   # [제20강 추가] JWT 발급자(issuer)와 대상(audience) — Gateway가 이 값을 검증합니다.
   issuer: ${JWT_ISSUER:msa-auth-service}
   audience: ${JWT_AUDIENCE:msa-gateway}
+
+# Consul 서비스 디스커버리 설정
+consul:
+  host: ${CONSUL_HOST:localhost}
+  port: ${CONSUL_PORT:8500}
+  health-path: /actuator/health
 
 logging:
   level:
