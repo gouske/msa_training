@@ -1,5 +1,6 @@
 package com.example.auth.infrastructure.consul
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
@@ -18,6 +19,13 @@ import java.net.InetAddress
  *
  * 외부 Consul 클라이언트 라이브러리를 쓰지 않고 RestTemplate으로 직접 HTTP 호출.
  * 4개 언어로 같은 패턴을 구현하는 학습 목적상 의도한 선택.
+ *
+ * 주소 결정 우선순위:
+ *   1. consul.service-address 환경변수 (docker-compose 에서 서비스명 주입)
+ *   2. InetAddress.getLocalHost().hostName (로컬 실행 환경용 fallback)
+ *
+ * Docker 환경에서 hostName 은 컨테이너 ID 라 다른 서비스가 DNS 해석을 못 함 —
+ * 반드시 CONSUL_SERVICE_ADDRESS=auth-service 로 override 해야 한다.
  */
 @Component
 class ConsulRegistrar(
@@ -26,18 +34,31 @@ class ConsulRegistrar(
     @Value("\${server.port:8080}") private val servicePort: Int,
     @Value("\${spring.application.name:auth-service}") private val serviceName: String,
     @Value("\${consul.health-path:/actuator/health}") private val healthPath: String,
+    @Value("\${consul.service-address:#{null}}") private val overrideAddress: String? = null,
     private val restTemplate: RestTemplate = RestTemplateBuilder().build(),
 ) {
     private val log = LoggerFactory.getLogger(ConsulRegistrar::class.java)
+    private val objectMapper = jacksonObjectMapper()
 
-    // 자기 식별: 호스트명-포트 조합. 같은 컨테이너 재시작 시 같은 ID로 upsert.
-    private val host: String = InetAddress.getLocalHost().hostName
+    // 주소 결정: override 우선, 없으면 hostName fallback
+    private val host: String = overrideAddress ?: InetAddress.getLocalHost().hostName
     private val serviceId: String = "$serviceName-$host-$servicePort"
 
     @PostConstruct
     fun register() {
-        // compact JSON 형태로 직렬화 — 테스트에서 정확한 키:값 패턴 검증을 위해 공백 제거
-        val payload = """{"ID":"$serviceId","Name":"$serviceName","Address":"$host","Port":$servicePort,"Check":{"HTTP":"http://$host:$servicePort$healthPath","Interval":"10s","Timeout":"2s","DeregisterCriticalServiceAfter":"30s"}}"""
+        // Jackson으로 Map → JSON 직렬화 (문자열 수작업 결합보다 안전하고 4언어 패턴 일관성 유지)
+        val payload = objectMapper.writeValueAsString(mapOf(
+            "ID" to serviceId,
+            "Name" to serviceName,
+            "Address" to host,
+            "Port" to servicePort,
+            "Check" to mapOf(
+                "HTTP" to "http://$host:$servicePort$healthPath",
+                "Interval" to "10s",
+                "Timeout" to "2s",
+                "DeregisterCriticalServiceAfter" to "30s",
+            ),
+        ))
 
         repeat(5) { attempt ->
             try {
@@ -46,10 +67,15 @@ class ConsulRegistrar(
                 return
             } catch (e: Exception) {
                 log.warn("Consul 등록 실패 (attempt {}/5): {}", attempt + 1, e.message)
-                Thread.sleep((100L * (1 shl attempt)).coerceAtMost(2000)) // exponential backoff
+                try {
+                    Thread.sleep((100L * (1 shl attempt)).coerceAtMost(2000)) // exponential backoff
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
             }
         }
-        log.error("Consul 등록 5회 모두 실패. 서비스는 격리된 상태로 계속 동작합니다.")
+        log.error("Consul 등록 5회 모두 실패. id={} — 서비스는 격리된 상태로 계속 동작합니다.", serviceId)
     }
 
     @PreDestroy

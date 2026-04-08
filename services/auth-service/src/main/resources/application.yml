@@ -32,6 +32,7 @@ consul:
   host: ${CONSUL_HOST:localhost}
   port: ${CONSUL_PORT:8500}
   health-path: /actuator/health
+  service-address: ${CONSUL_SERVICE_ADDRESS:#{null}}
 
 logging:
   level:

@@ -98,4 +98,29 @@ class ConsulRegistrarTest {
         val secondId = Regex("\"ID\":\"([^\"]+)\"").find(second)!!.groupValues[1]
         assertEquals(firstId, secondId)
     }
+
+    @Test
+    fun `consul_service_address override 가 있으면 주소가 덮어쓰여진다`() {
+        // GIVEN: overrideAddress 를 "auth-service" (docker-compose 서비스명) 로 직접 주입
+        val customRegistrar = ConsulRegistrar(
+            consulHost = mockConsul.hostName,
+            consulPort = mockConsul.port,
+            servicePort = 8080,
+            serviceName = "auth-service",
+            healthPath = "/actuator/health",
+            overrideAddress = "auth-service",
+            restTemplate = RestTemplate(),
+        )
+        mockConsul.enqueue(MockResponse().setResponseCode(200))
+
+        // WHEN
+        customRegistrar.register()
+
+        // THEN: 페이로드의 Address 가 "auth-service"
+        val body = mockConsul.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"Address\":\"auth-service\""))
+        assertTrue(body.contains("\"HTTP\":\"http://auth-service:8080/actuator/health\""))
+        // service-id 도 override 주소를 포함
+        assertTrue(body.contains("\"ID\":\"auth-service-auth-service-8080\""))
+    }
 }
