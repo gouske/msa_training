@@ -7,6 +7,9 @@ const Order = require('./models/Order'); // 위에서 만든 모델
 // 기존 동기식 HTTP 결제 호출을 대체합니다.
 const { sendOrderMessage } = require('./producer');
 
+// [실전 #6] Consul 자기 등록 모듈
+const { register, setupGracefulShutdown } = require('./infrastructure/consulRegistrar');
+
 // [제19강 변경] 서킷 브레이커 import 제거
 // 이전 코드: const { authBreaker } = require('./circuitBreaker');
 // 이유: Gateway가 JWT를 중앙에서 검증하므로 Order Service가 Auth Service를 직접 호출할 필요가 없어졌습니다.
@@ -199,4 +202,21 @@ app.get('/api/order/health', (req, res) => {
 // 6. 서버를 가동합니다.
 app.listen(PORT, () => {
     console.log(`🚀 주문 서비스가 http://localhost:${PORT} 에서 시작되었습니다.`);
+
+    // [실전 #6] Consul 자기 등록
+    const consulUrl = `http://${process.env.CONSUL_HOST || 'localhost'}:${process.env.CONSUL_PORT || 8500}`;
+    // 주소 결정 우선순위: CONSUL_SERVICE_ADDRESS → HOSTNAME → "order-service"
+    // Docker 환경에서는 CONSUL_SERVICE_ADDRESS=order-service-1 (Task 9) 를 주입
+    const myHost = process.env.CONSUL_SERVICE_ADDRESS || process.env.HOSTNAME || 'order-service';
+    register({
+        consulUrl,
+        name: 'order-service',
+        host: myHost,
+        port: PORT,
+        healthPath: '/api/order/health',
+    }).then((serviceId) => {
+        setupGracefulShutdown(consulUrl, serviceId);
+    }).catch((err) => {
+        console.warn('Consul 등록 실패 (무시):', err.message);
+    });
 });
