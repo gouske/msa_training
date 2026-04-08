@@ -11,6 +11,7 @@
 """
 
 import os
+import socket     # HOSTNAME fallback용 — Docker 환경에서는 CONSUL_SERVICE_ADDRESS 환경변수 우선
 import threading  # Consumer를 FastAPI와 별도 스레드에서 실행하기 위해 사용
 import time       # RabbitMQ 재연결 대기 시 사용
 import json       # RabbitMQ 메시지 파싱. 큐에서 받은 메시지(bytes)를 딕셔너리로 변환하기 위해 사용
@@ -19,6 +20,8 @@ import requests   # requests: Python에서 HTTP 요청을 보내는 라이브러
 from contextlib import asynccontextmanager  # FastAPI lifespan 패턴에 필요한 컨텍스트 매니저
 from fastapi import FastAPI
 from pydantic import BaseModel
+# [실전 #6] Consul 자기 등록/해제 모듈
+from infrastructure.consul_registrar import register, deregister
 
 # --- 환경 변수 ---
 # Order Service 콜백 주소: 결제 완료 후 주문 상태 업데이트를 위해 호출합니다.
@@ -176,8 +179,30 @@ async def lifespan(app: FastAPI):
     consumer_thread.start()
     print("🚀 RabbitMQ Consumer 스레드 시작됨")
 
+    # [실전 #6] Consul 자기 등록
+    # 주소 결정 우선순위: CONSUL_SERVICE_ADDRESS → HOSTNAME → socket.gethostname() fallback
+    # Docker 환경에서 컨테이너 ID 대신 서비스 이름을 쓰려면 CONSUL_SERVICE_ADDRESS 주입 필요
+    consul_url = f"http://{os.getenv('CONSUL_HOST', 'localhost')}:{os.getenv('CONSUL_PORT', '8500')}"
+    host = (
+        os.getenv("CONSUL_SERVICE_ADDRESS")
+        or os.getenv("HOSTNAME")
+        or socket.gethostname()
+    )
+    sid = await register(
+        consul_url=consul_url,
+        name="payment-service",
+        host=host,
+        port=8082,
+        health_path="/api/payment/health",
+    )
+    app.state.consul_service_id = sid
+    app.state.consul_url = consul_url
+
     yield  # 이 지점에서 FastAPI가 요청을 받기 시작합니다.
-    # 종료 처리: daemon=True이므로 별도 종료 코드 불필요
+
+    # [실전 #6] Consul 해제 (graceful shutdown)
+    # 종료 처리: daemon=True이므로 RabbitMQ 스레드는 별도 종료 코드 불필요
+    await deregister(consul_url, sid)
 
 # lifespan을 FastAPI 앱에 등록합니다.
 app = FastAPI(lifespan=lifespan)
