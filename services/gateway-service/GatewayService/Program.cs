@@ -72,20 +72,29 @@ builder.Services.AddAuthorization();
 
 // [실전 #6] Consul 동적 라우팅
 // 1. Routes는 정적: appsettings.json 의 ReverseProxy.Routes 섹션을 한 번만 읽어 List<RouteConfig> 로 변환
+//    각 route 에 PathRemovePrefix transform 을 자동으로 붙여, 요청 "/auth/api/auth/signup" 에서
+//    "/auth" prefix 를 제거한 뒤 백엔드의 실제 경로 "/api/auth/signup" 으로 전달한다.
+//    (route-id 규칙: "auth-route" → prefix "/auth", "order-route" → "/order", "payment-route" → "/payment")
 var staticRoutes = builder.Configuration
     .GetSection("ReverseProxy:Routes")
     .GetChildren()
     .Select(routeSection =>
     {
+        var routeId = routeSection.Key;
+        var pathPrefix = "/" + routeId.Split('-')[0]; // "auth-route" → "/auth"
         var route = new Yarp.ReverseProxy.Configuration.RouteConfig
         {
-            RouteId = routeSection.Key,
+            RouteId = routeId,
             ClusterId = routeSection["ClusterId"],
             Match = new Yarp.ReverseProxy.Configuration.RouteMatch
             {
                 Path = routeSection.GetSection("Match")["Path"],
             },
             AuthorizationPolicy = routeSection["AuthorizationPolicy"],
+            Transforms = new List<IReadOnlyDictionary<string, string>>
+            {
+                new Dictionary<string, string> { ["PathRemovePrefix"] = pathPrefix }
+            },
         };
         return route;
     })

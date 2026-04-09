@@ -65,10 +65,13 @@ public class ConsulPollingWorker : BackgroundService
             try
             {
                 var instances = await _client.GetPassingInstancesAsync(name, ct);
-                // 각 인스턴스를 YARP DestinationConfig로 변환
+                // 각 인스턴스를 YARP DestinationConfig로 변환.
+                // Address 에는 path 없이 host:port 만 둔다. Route 의 PathRemovePrefix transform 이
+                // 요청 경로에서 "/auth" 등의 prefix 를 제거한 뒤, YARP 가 나머지 경로("/api/auth/signup")
+                // 를 destination 에 붙여 최종 URL 을 만든다.
                 var dests = instances.ToDictionary(
                     i => $"dest-{i.Address}-{i.Port}",
-                    i => new DestinationConfig { Address = $"http://{i.Address}:{i.Port}/api/" });
+                    i => new DestinationConfig { Address = $"http://{i.Address}:{i.Port}" });
 
                 newClusters.Add(new ClusterConfig
                 {
