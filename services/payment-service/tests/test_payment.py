@@ -10,7 +10,7 @@
 """
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 import requests  # [제21강 추가] HTTPError 예외 클래스를 사용하기 위해 import
@@ -146,15 +146,22 @@ class TestProcessPaymentLogic:
 class TestOnOrderMessage:
     """RabbitMQ 메시지 콜백 함수 테스트"""
 
+    @patch("main.find_instance", new_callable=AsyncMock)  # [실전 #6] Consul 조회 AsyncMock
     @patch("main.requests.post")
-    def test_successful_message_sends_ack(self, mock_post):
+    def test_successful_message_sends_ack(self, mock_post, mock_find_instance):
         """
         정상 메시지 수신 시 콜백 전송 후 ACK를 보내는지 확인
 
         [제21강 변경] basic_ack 호출 검증 추가
         이전: 콜백 전송만 확인
         이후: 콜백 전송 + ACK 호출까지 확인 (메시지가 큐에서 안전하게 제거됨)
+
+        [실전 #6 변경] find_instance는 async 함수이므로 AsyncMock으로 모킹.
+        asyncio.run(mock_find_instance(...))이 ("order-service-1", 8081)을 반환하도록 설정.
         """
+        # find_instance("consul_url", "order-service") 호출 시 (host, port) 반환
+        mock_find_instance.return_value = ("order-service-1", 8081)
+
         message_body = json.dumps({
             "orderId": "order-msg-001",
             "amount": 30000,
@@ -208,14 +215,19 @@ class TestOnOrderMessage:
         mock_ch.basic_nack.assert_called_once_with(delivery_tag=2, requeue=False)
         mock_ch.basic_ack.assert_not_called()
 
+    @patch("main.find_instance", new_callable=AsyncMock)  # [실전 #6] Consul 조회 AsyncMock
     @patch("main.requests.post")
-    def test_callback_409_sends_ack(self, mock_post):
+    def test_callback_409_sends_ack(self, mock_post, mock_find_instance):
         """
         [핫픽스] 콜백 응답이 409(이미 처리됨)일 때 ACK를 보내는지 확인
 
         409는 "이미 처리된 주문"을 의미하므로 장애가 아닌 정상적인 중복 요청입니다.
         DLQ에 보내면 실제 장애와 구분이 안 되므로 ACK로 처리합니다.
+
+        [실전 #6 변경] find_instance는 async 함수이므로 AsyncMock으로 모킹.
         """
+        mock_find_instance.return_value = ("order-service-1", 8081)
+
         mock_response = MagicMock()
         mock_response.status_code = 409  # 이미 처리됨
         mock_post.return_value = mock_response
