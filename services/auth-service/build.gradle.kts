@@ -57,6 +57,10 @@ dependencies {
     testImplementation("org.mockito:mockito-core:5.14.2")
     testImplementation("org.mockito:mockito-junit-jupiter:5.14.2")
 
+    // MockWebServer: Consul HTTP API를 모의(mock)해서 단위 테스트에서 실제 Consul 없이도 검증합니다.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // JWT 생성을 위한 실무 표준 라이브러리
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
