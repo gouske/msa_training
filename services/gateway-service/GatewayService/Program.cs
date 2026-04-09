@@ -70,9 +70,57 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // ASP.NET Core의 기본 정책(RequireAuthenticatedUser)이 적용됩니다.
 builder.Services.AddAuthorization();
 
-// 1. 게이트웨이 서비스 등록 (기존 코드)
-builder.Services.AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+// [실전 #6] Consul 동적 라우팅
+// 1. Routes는 정적: appsettings.json 의 ReverseProxy.Routes 섹션을 한 번만 읽어 List<RouteConfig> 로 변환
+var staticRoutes = builder.Configuration
+    .GetSection("ReverseProxy:Routes")
+    .GetChildren()
+    .Select(routeSection =>
+    {
+        var route = new Yarp.ReverseProxy.Configuration.RouteConfig
+        {
+            RouteId = routeSection.Key,
+            ClusterId = routeSection["ClusterId"],
+            Match = new Yarp.ReverseProxy.Configuration.RouteMatch
+            {
+                Path = routeSection.GetSection("Match")["Path"],
+            },
+            AuthorizationPolicy = routeSection["AuthorizationPolicy"],
+        };
+        return route;
+    })
+    .ToList();
+
+// 2. ConsulHealthClient를 HttpClient + Consul:Address 로 등록
+var consulAddress = builder.Configuration["Consul:Address"] ?? "http://localhost:8500";
+builder.Services.AddHttpClient<GatewayService.Discovery.ConsulHealthClient>(c =>
+{
+    c.BaseAddress = new Uri(consulAddress);
+    c.Timeout = TimeSpan.FromSeconds(3);
+});
+
+// 3. Provider를 싱글턴으로 등록 + IProxyConfigProvider 인터페이스에도 같은 인스턴스 노출
+builder.Services.AddSingleton(sp =>
+    new GatewayService.Discovery.ConsulProxyConfigProvider(
+        staticRoutes,
+        sp.GetRequiredService<ILogger<GatewayService.Discovery.ConsulProxyConfigProvider>>()));
+builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvider>(sp =>
+    sp.GetRequiredService<GatewayService.Discovery.ConsulProxyConfigProvider>());
+
+// 4. 폴링 워커 등록 (BackgroundService)
+var pollingServices = builder.Configuration.GetSection("Consul:Services").Get<string[]>()
+    ?? new[] { "auth-service", "order-service", "payment-service" };
+var intervalSec = builder.Configuration.GetValue<int?>("Consul:PollIntervalSeconds") ?? 5;
+
+builder.Services.AddHostedService(sp => new GatewayService.Discovery.ConsulPollingWorker(
+    sp.GetRequiredService<GatewayService.Discovery.ConsulHealthClient>(),
+    sp.GetRequiredService<GatewayService.Discovery.ConsulProxyConfigProvider>(),
+    pollingServices,
+    TimeSpan.FromSeconds(intervalSec),
+    sp.GetRequiredService<ILogger<GatewayService.Discovery.ConsulPollingWorker>>()));
+
+// 5. YARP 등록 — 등록된 IProxyConfigProvider 자동 사용 (LoadFromConfig 호출하지 않음)
+builder.Services.AddReverseProxy();
 
 var app = builder.Build();
 
