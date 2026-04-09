@@ -31,7 +31,10 @@ jwt:
 consul:
   host: ${CONSUL_HOST:localhost}
   port: ${CONSUL_PORT:8500}
-  health-path: /actuator/health
+  # [실전 #6] /actuator/health 는 SecurityConfig 의 화이트리스트에 없어 403.
+  # AuthController 가 제공하는 /api/auth/health (AUTH_GET_WHITELIST 에 등록됨) 사용.
+  # order-service 의 /api/order/health, payment-service 의 /api/payment/health 와 패턴 일관성 유지.
+  health-path: /api/auth/health
   service-address: ${CONSUL_SERVICE_ADDRESS:#{null}}
 
 logging:

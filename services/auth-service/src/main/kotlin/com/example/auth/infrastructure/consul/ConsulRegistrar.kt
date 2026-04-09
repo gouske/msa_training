@@ -33,7 +33,7 @@ class ConsulRegistrar(
     @Value("\${consul.port}") private val consulPort: Int,
     @Value("\${server.port:8080}") private val servicePort: Int,
     @Value("\${spring.application.name:auth-service}") private val serviceName: String,
-    @Value("\${consul.health-path:/actuator/health}") private val healthPath: String,
+    @Value("\${consul.health-path:/api/auth/health}") private val healthPath: String,
     @Value("\${consul.service-address:#{null}}") private val overrideAddress: String? = null,
     private val restTemplate: RestTemplate = RestTemplateBuilder().build(),
 ) {
