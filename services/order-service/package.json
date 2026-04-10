@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "jest --testPathPattern=__tests__"
+    "test": "jest --testPathPattern=__tests__",
+    "test:domain": "jest --testPathPattern=__tests__/domain",
+    "test:app": "jest --testPathPattern=__tests__/application",
+    "test:http": "jest --testPathPattern=__tests__/order"
   },
   "keywords": [],
   "author": "",
