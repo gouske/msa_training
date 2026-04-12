@@ -40,9 +40,13 @@ function createOrderRouter({ orderService, internalApiKey }) {
             });
         }
 
+        // [제20강] X-Correlation-ID 헤더를 읽어 서비스 계층으로 전달합니다.
+        // 헤더가 없으면 빈 문자열 — 도메인 계층은 HTTP 헤더를 직접 알 필요가 없습니다.
+        const correlationId = req.headers['x-correlation-id'] || '';
+
         const { itemId, quantity, price } = req.body;
         try {
-            const result = await orderService.createOrder(userEmail, itemId, quantity, price);
+            const result = await orderService.createOrder(userEmail, itemId, quantity, price, correlationId);
             return res.status(202).json({
                 message: '주문이 접수되었습니다. 결제가 백그라운드에서 처리됩니다.',
                 ...result,

@@ -40,21 +40,38 @@ describe('OrderService (애플리케이션 서비스)', () => {
             // GIVEN: 저장 성공 시 orderId 반환
             mockRepo.save.mockResolvedValue('saved-order-id');
 
-            // WHEN: 주문 생성 요청
+            // WHEN: 주문 생성 요청 (correlationId 없는 경우 — 기본값 빈 문자열)
             const result = await orderService.createOrder('buyer@test.com', 'ITEM-001', 2, 5000);
 
             // THEN: 저장소에 저장됨
             expect(mockRepo.save).toHaveBeenCalledTimes(1);
 
-            // THEN: 메시지가 올바른 형식으로 발행됨
+            // THEN: 메시지가 올바른 형식으로 발행됨 (correlationId 포함 — 제20강)
             expect(mockPublisher.publish).toHaveBeenCalledWith({
                 orderId: 'saved-order-id',
                 amount: 10000, // 5000 × 2
                 userEmail: 'buyer@test.com',
+                correlationId: '', // 헤더 없으면 빈 문자열 전달
             });
 
             // THEN: orderId와 PENDING 상태 반환
             expect(result).toEqual({ orderId: 'saved-order-id', status: 'PENDING' });
+        });
+
+        test('correlationId가 전달되면 메시지 본문에 포함된다', async () => {
+            // GIVEN
+            mockRepo.save.mockResolvedValue('order-with-trace');
+
+            // WHEN: correlationId를 명시적으로 전달
+            await orderService.createOrder('buyer@test.com', 'ITEM-001', 1, 3000, 'trace-xyz');
+
+            // THEN: 발행된 메시지에 correlationId가 포함됨
+            expect(mockPublisher.publish).toHaveBeenCalledWith({
+                orderId: 'order-with-trace',
+                amount: 3000,
+                userEmail: 'buyer@test.com',
+                correlationId: 'trace-xyz',
+            });
         });
     });
 

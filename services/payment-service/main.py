@@ -64,7 +64,10 @@ def on_order_message(ch, method, properties, body):
     # body는 bytes 타입이므로 JSON으로 파싱합니다.
     order_data = json.loads(body)
     order_id = order_data["orderId"]
-    print(f" [v] 결제 서비스: 주문 메시지 수신됨 orderId={order_id}")
+    # [제20강] RabbitMQ 메시지 본문에서 correlationId를 꺼냅니다.
+    # HTTP 헤더는 큐를 통과하면 사라지므로, Order Service가 본문에 포함시켜 보낸 값을 읽습니다.
+    correlation_id = order_data.get("correlationId", "")
+    print(f" [v] 결제 서비스: 주문 메시지 수신됨 orderId={order_id} correlationId={correlation_id}")
 
     # 결제 처리 실행
     payment_status = process_payment(order_data)
@@ -82,11 +85,14 @@ def on_order_message(ch, method, properties, body):
             return
 
         callback_url = f"http://{host}:{port}/api/order/callback"
+        # [제20강] X-Correlation-ID 헤더를 콜백 요청에 포함합니다.
+        # Order Service가 이 헤더를 로그에 기록하면, Kibana에서 요청 전체 경로를 추적할 수 있습니다.
         response = requests.post(callback_url, json={
             "orderId": order_id,
             "paymentStatus": payment_status
         }, headers={
-            "X-Internal-Key": INTERNAL_API_KEY
+            "X-Internal-Key": INTERNAL_API_KEY,
+            "X-Correlation-ID": correlation_id,
         }, timeout=5)
 
         # [핫픽스] 응답 코드별 ACK/NACK 분기

@@ -137,25 +137,54 @@ var app = builder.Build();
 // 미들웨어 파이프라인 순서가 중요합니다!
 //
 // [변경 전] 기존에는 MapReverseProxy()만 있어서 모든 요청이 무조건 통과했습니다.
-// [변경 후] 인증 → 권한 확인 → 헤더 주입 → YARP 프록시 순서로 처리됩니다.
+// [변경 후] Correlation ID → 인증 → 권한 확인 → 헤더 주입 → YARP 프록시 순서로 처리됩니다.
 //
 // 요청 흐름:
-//   클라이언트 → UseAuthentication (토큰 파싱)
+//   클라이언트 → Correlation ID 미들웨어 (모든 요청에 추적 ID 부여 — 반드시 최우선)
+//             → UseAuthentication (토큰 파싱)
 //             → UseAuthorization (권한 확인: Anonymous vs 인증 필요)
 //             → 커스텀 미들웨어 (X-User-Email 헤더 주입)
 //             → MapReverseProxy (백엔드 서비스로 전달)
+//
+// [제20강] Correlation ID가 UseAuthentication 앞에 있어야 하는 이유:
+//   UseAuthorization이 401을 반환하면 파이프라인이 그 시점에서 끊깁니다.
+//   Correlation ID 미들웨어가 뒤에 있으면 실행 자체가 되지 않아
+//   401 응답 헤더에 X-Correlation-ID가 포함되지 않습니다.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// 1단계: 인증 미들웨어 — Authorization 헤더에서 JWT를 꺼내 검증합니다.
+// [제20강] 1단계: Correlation ID 미들웨어 — 반드시 인증보다 먼저 등록합니다.
+// 역할: 모든 요청에 고유 ID를 붙여서, 여러 마이크로서비스를 거치는 요청을 하나로 추적합니다.
+// 흐름: 외부 클라이언트가 X-Correlation-ID를 보내면 그대로 사용하고,
+//       없으면 Gateway에서 새 UUID를 생성합니다. → 응답 헤더에도 동일한 ID를 돌려줍니다.
+app.Use(async (context, next) =>
+{
+    // 1) 클라이언트가 헤더를 보냈으면 재사용, 없으면 새 UUID 생성
+    if (!context.Request.Headers.ContainsKey("X-Correlation-ID"))
+        context.Request.Headers["X-Correlation-ID"] = Guid.NewGuid().ToString();
+
+    var correlationId = context.Request.Headers["X-Correlation-ID"].ToString();
+
+    // 2) 응답 헤더에도 동일한 ID를 추가 → 클라이언트가 자신의 요청을 추적할 수 있습니다.
+    //    OnStarting: 응답 본문이 쓰이기 직전에 실행되므로 401/403 응답에도 헤더가 포함됩니다.
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Correlation-ID"] = correlationId;
+        return Task.CompletedTask;
+    });
+
+    await next();
+});
+
+// 2단계: 인증 미들웨어 — Authorization 헤더에서 JWT를 꺼내 검증합니다.
 //        검증 성공 시 HttpContext.User에 사용자 정보(claims)를 채웁니다.
 app.UseAuthentication();
 
-// 2단계: 권한 미들웨어 — YARP 라우트별 AuthorizationPolicy를 확인합니다.
+// 3단계: 권한 미들웨어 — YARP 라우트별 AuthorizationPolicy를 확인합니다.
 //        "Anonymous" 라우트: 토큰 없이도 통과
 //        "default" 라우트: 인증된 사용자만 통과 (토큰 없으면 401 Unauthorized 반환)
 app.UseAuthorization();
 
-// 3단계: [핫픽스] 내부 전용 콜백 경로를 외부에서 접근하지 못하도록 차단합니다.
+// 4단계: [핫픽스] 내부 전용 콜백 경로를 외부에서 접근하지 못하도록 차단합니다.
 // 문제: /order/{**remainder} 와일드카드가 /order/order/callback도 프록시하여
 //       외부 사용자가 내부 콜백 API에 도달할 수 있었습니다.
 // 해결: 요청 경로에 "/order/callback"이 포함되면 즉시 403을 반환합니다.
@@ -171,7 +200,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
-// 4단계: 커스텀 미들웨어 — 인증된 사용자의 이메일을 X-User-Email 헤더에 넣어줍니다.
+// 5단계: 커스텀 미들웨어 — 인증된 사용자의 이메일을 X-User-Email 헤더에 넣어줍니다.
 // [변경 전] 기존에는 Order Service가 Auth Service에 HTTP 호출을 해서 이메일을 받아왔습니다.
 // [변경 후] Gateway가 JWT에서 이메일을 추출하여 헤더로 전달합니다.
 //          → Order Service는 이 헤더만 읽으면 되므로 Auth Service를 호출할 필요가 없습니다.
@@ -193,7 +222,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
-// 4단계: YARP 게이트웨이 활성화 (기존 코드)
+// 6단계: YARP 게이트웨이 활성화 (기존 코드)
 app.MapReverseProxy();
 
 app.Run();
