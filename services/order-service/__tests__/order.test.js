@@ -77,8 +77,27 @@ describe('POST /api/order (주문 생성)', () => {
         expect(res.status).toBe(202);
         expect(res.body.status).toBe('PENDING');
         expect(res.body.orderId).toBe('mock-order-id-123');
+        // [제20강] 5번째 인수: correlationId — 헤더 없으므로 빈 문자열
         expect(mockOrderService.createOrder).toHaveBeenCalledWith(
-            'buyer@test.com', 'ITEM-001', 2, 15000
+            'buyer@test.com', 'ITEM-001', 2, 15000, ''
+        );
+    });
+
+    test('X-Correlation-ID 헤더가 있으면 createOrder에 correlationId가 전달된다', async () => {
+        // GIVEN
+        mockOrderService.createOrder.mockResolvedValue({ orderId: 'order-xyz', status: 'PENDING' });
+
+        // WHEN: X-Correlation-ID 헤더를 포함하여 요청
+        const res = await request(createTestApp(mockOrderService))
+            .post('/api/order')
+            .set('X-User-Email', 'buyer@test.com')
+            .set('X-Correlation-ID', 'trace-abc-123')
+            .send({ itemId: 'ITEM-001', quantity: 1, price: 5000 });
+
+        // THEN: correlationId가 서비스로 전달됨
+        expect(res.status).toBe(202);
+        expect(mockOrderService.createOrder).toHaveBeenCalledWith(
+            'buyer@test.com', 'ITEM-001', 1, 5000, 'trace-abc-123'
         );
     });
 

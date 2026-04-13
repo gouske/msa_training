@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    [제20강] Correlation ID 분산 추적을 위한 Logback 설정
+
+    핵심 변경:
+    - 기존 패턴: 시간 | 레벨 | 스레드 | 로거 - 메시지
+    - 변경 패턴: 시간 | 레벨 | [correlationId] | 스레드 | 로거 - 메시지
+
+    %X{correlationId}: MDC(Mapped Diagnostic Context)에서 correlationId를 꺼내 출력합니다.
+    JwtAuthenticationFilter에서 MDC.put("correlationId", correlationId)로 저장한 값입니다.
+    correlationId가 없으면(MDC에 키가 없으면) 빈 문자열로 출력됩니다.
+
+    Kibana에서 이 ID로 검색하면 → Gateway → Auth → Order → Payment 전체 여정을 볼 수 있습니다.
+-->
+<configuration>
+
+    <!-- Spring Boot 기본 설정 상속 (색상 출력, 프로파일별 로그 레벨 등) -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- 콘솔 출력 Appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!--
+                패턴 설명:
+                %d{HH:mm:ss.SSS}    — 시간 (시:분:초.밀리초)
+                %5p                 — 로그 레벨 (5자 고정폭: DEBUG, INFO, WARN, ERROR)
+                [%X{correlationId}] — MDC의 correlationId 값 (없으면 [] 출력)
+                [%t]                — 스레드 이름
+                %-40.40logger{39}   — 로거 이름 (최대 40자, 패키지 39자로 축약)
+                %m%n                — 로그 메시지 + 개행
+            -->
+            <pattern>%d{HH:mm:ss.SSS} %5p [%X{correlationId}] [%t] %-40.40logger{39} : %m%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 루트 로거: INFO 이상 출력 -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- Auth Service 패키지는 DEBUG 수준으로 상세 출력 (개발 중 학습 목적) -->
+    <logger name="com.example.auth" level="DEBUG"/>
+
+</configuration>

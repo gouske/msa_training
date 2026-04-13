@@ -37,19 +37,24 @@ class OrderService {
      * 주문 생성 유스케이스
      * 1. 도메인 객체 생성 (Order, OrderItem, Money)
      * 2. 저장소에 저장
-     * 3. 결제 메시지 발행
+     * 3. 결제 메시지 발행 (correlationId 포함 — 분산 추적용)
+     * @param {string} correlationId - X-Correlation-ID 값 (없으면 빈 문자열)
      * @returns {{ orderId: string, status: 'PENDING' }}
      */
-    async createOrder(userEmail, itemId, quantity, price) {
+    async createOrder(userEmail, itemId, quantity, price, correlationId = '') {
         const item = new OrderItem(itemId, new Money(price), quantity);
         const order = Order.create(userEmail, item);
 
         const orderId = await this._repo.save(order);
 
+        // [제20강] correlationId를 메시지 본문에 포함합니다.
+        // HTTP 헤더는 RabbitMQ 큐를 통과하면 사라지므로, 본문(body) JSON에 넣어야
+        // Payment Service가 꺼내서 콜백 호출 시 동일한 ID를 전달할 수 있습니다.
         await this._publisher.publish({
             orderId,
             amount: order.totalAmount().amount,
             userEmail,
+            correlationId,
         });
 
         return { orderId, status: 'PENDING' };
