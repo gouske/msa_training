@@ -1,0 +1,83 @@
+# [K8s] Deployment: Pod 의 생성·복제·업데이트를 관리하는 컨트롤러
+# "order-service Pod 을 2개 유지하고, 죽으면 자동으로 재생성하라"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: msa-training
+  labels:
+    app: order-service
+    context: order    # DDD Bounded Context 식별 레이블
+spec:
+  # replicas: 동시에 실행할 Pod 복제본 수
+  # 2개 이상이면 하나가 죽어도 서비스 지속 가능
+  replicas: 2
+
+  # selector: 이 Deployment 가 관리할 Pod 을 선택하는 기준
+  selector:
+    matchLabels:
+      app: order-service
+
+  # strategy: 업데이트 배포 전략
+  # RollingUpdate: 구 버전 Pod 을 하나씩 제거하면서 신 버전 Pod 을 추가 → 무중단 배포
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # 업데이트 중 최대 1개 추가 Pod 허용
+      maxUnavailable: 0  # 업데이트 중 기존 Pod 제거 금지 (안전 우선)
+
+  # template: 생성할 Pod 의 실제 정의
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+        - name: order-service
+          # CI/CD 파이프라인(GitHub Actions)에서 빌드한 이미지 사용
+          # 실제 배포 시 your-dockerhub 를 본인 Docker Hub 사용자명으로 교체
+          image: your-dockerhub/order-service:latest
+          ports:
+            - containerPort: 8081
+
+          # 환경 변수: ConfigMap 전체를 한 번에 주입
+          envFrom:
+            - configMapRef:
+                name: msa-config
+
+          # Secret 에서 개별 값 주입
+          env:
+            - name: INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: INTERNAL_API_KEY
+
+          # resources: CPU/메모리 제한
+          # requests: 스케줄링 시 보장되는 최소 리소스
+          # limits: 초과 시 Pod 재시작(OOMKilled)
+          resources:
+            requests:
+              cpu: "100m"      # 0.1 CPU 코어
+              memory: "128Mi"  # 128MB
+            limits:
+              cpu: "500m"      # 0.5 CPU 코어
+              memory: "256Mi"  # 256MB
+
+          # livenessProbe: Pod 가 살아있는지 확인
+          # 연속 실패 시 Pod 를 재시작한다.
+          livenessProbe:
+            httpGet:
+              path: /api/order/health
+              port: 8081
+            initialDelaySeconds: 15  # 컨테이너 시작 후 15초 대기 (Node.js 시작 빠름)
+            periodSeconds: 30        # 30초마다 확인
+
+          # readinessProbe: 트래픽을 받을 준비가 됐는지 확인
+          # 실패 시 Service 에서 제외 (재시작이 아니라 격리)
+          readinessProbe:
+            httpGet:
+              path: /api/order/health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10

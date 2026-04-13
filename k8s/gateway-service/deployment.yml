@@ -1,0 +1,76 @@
+# [K8s] Gateway Service Deployment
+# C# + ASP.NET Core + YARP 기반. 외부 트래픽의 유일한 진입점.
+# JWT 검증을 담당하므로 JWT_SECRET_KEY 가 반드시 주입돼야 한다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-service
+  namespace: msa-training
+  labels:
+    app: gateway-service
+    context: gateway    # API Gateway — 모든 바운디드 컨텍스트의 진입점
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: gateway-service
+    spec:
+      containers:
+        - name: gateway-service
+          image: your-dockerhub/gateway-service:latest
+          ports:
+            - containerPort: 9000
+
+          # ASP.NET Core 환경 설정
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+            - name: ASPNETCORE_URLS
+              value: "http://+:9000"
+            # .NET 의 계층 구분자 __ : Jwt__SecretKey → appsettings.json 의 Jwt.SecretKey
+            - name: Jwt__SecretKey
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: JWT_SECRET_KEY
+            # YARP 업스트림 주소: K8s Service 이름으로 접근
+            - name: ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address
+              value: "http://auth-service:8080/api/"
+            - name: ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address
+              value: "http://order-service:8081/api/"
+            - name: ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address
+              value: "http://payment-service:8082/api/"
+
+          # .NET 은 메모리 효율이 좋으므로 적당한 값으로 설정
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          # [제22강] /health 엔드포인트 기반 HTTP 프로브
+          # tcpSocket 보다 정확: 앱이 실제로 요청을 처리할 수 있는지 확인
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
