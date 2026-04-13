@@ -1,0 +1,80 @@
+# [K8s] Auth Service Deployment
+# Kotlin + Spring Boot 기반. JVM 특성상 메모리와 시작 시간이 더 필요하다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: msa-training
+  labels:
+    app: auth-service
+    context: auth    # DDD Bounded Context 식별 레이블
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: your-dockerhub/auth-service:latest
+          ports:
+            - containerPort: 8080
+
+          # ConfigMap 전체 주입
+          envFrom:
+            - configMapRef:
+                name: msa-config
+
+          # Secret 에서 개별 값 참조 (Spring Boot 환경 변수 이름과 일치)
+          env:
+            - name: SPRING_DATASOURCE_URL
+              # auth-db 는 아래 postgres-deployment.yml 에서 정의한 Service 이름
+              value: "jdbc:postgresql://auth-db:5432/auth_db"
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: POSTGRES_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: POSTGRES_PASSWORD
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: JWT_SECRET_KEY
+
+          # JVM 은 메모리를 더 사용하므로 Order/Payment 보다 높게 설정
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+
+          # Spring Boot 시작이 느리므로 초기 대기 시간을 더 길게 설정
+          livenessProbe:
+            httpGet:
+              path: /api/auth/health
+              port: 8080
+            initialDelaySeconds: 30  # Spring Boot 완전 기동 대기
+            periodSeconds: 30
+
+          readinessProbe:
+            httpGet:
+              path: /api/auth/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10

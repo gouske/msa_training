@@ -1,0 +1,67 @@
+# [K8s] Payment Service Deployment
+# Python + FastAPI 기반. 경량 프로세스이므로 리소스 요구량이 낮다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: msa-training
+  labels:
+    app: payment-service
+    context: payment    # DDD Bounded Context 식별 레이블
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+        - name: payment-service
+          image: your-dockerhub/payment-service:latest
+          ports:
+            - containerPort: 8082
+
+          # ConfigMap 전체 주입
+          envFrom:
+            - configMapRef:
+                name: msa-config
+
+          # Secret 에서 개별 값 참조
+          env:
+            - name: INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: msa-secrets
+                  key: INTERNAL_API_KEY
+
+          # Python FastAPI 는 경량이므로 리소스 요구량이 낮다
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          # FastAPI 시작이 빠르므로 초기 대기 시간을 짧게 설정
+          livenessProbe:
+            httpGet:
+              path: /api/payment/health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 30
+
+          readinessProbe:
+            httpGet:
+              path: /api/payment/health
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 10
