@@ -1,0 +1,113 @@
+# [GitHub Actions] Auth Service CI/CD 파이프라인
+#
+# 트리거 조건: services/auth-service/ 하위 파일이 변경된 경우만 실행
+# CI: JDK 21 + Gradle + PostgreSQL 서비스 컨테이너 + 테스트
+# CD: Docker 이미지 빌드 → Docker Hub 푸시 (main 브랜치 push 시)
+
+name: Auth Service CI/CD
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/auth-service/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/auth-service/**'
+
+jobs:
+  # ─────────────────────────────────────────
+  # Job 1: 테스트 실행 (CI)
+  # Auth Service는 PostgreSQL 이 필요하므로
+  # services 블록으로 테스트 전용 DB를 자동 기동한다.
+  # ─────────────────────────────────────────
+  test:
+    name: 테스트 실행
+    runs-on: ubuntu-latest
+
+    # 테스트에 필요한 외부 서비스를 컨테이너로 자동 실행
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: auth_test_db
+        ports:
+          - 5432:5432
+        # DB가 완전히 준비될 때까지 헬스체크로 대기
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      # JDK 21 설치 (build.gradle.kts 의 JavaLanguageVersion.of(21) 과 일치)
+      # distribution: temurin → Eclipse Temurin JDK (무료 오픈소스)
+      - name: JDK 21 설정
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Gradle 캐시 설정 (빌드 속도 향상)
+      - name: Gradle 설정
+        uses: gradle/actions/setup-gradle@v3
+
+      # Gradle 테스트 실행
+      # 환경 변수로 테스트용 PostgreSQL 연결 정보 주입
+      - name: 테스트 실행
+        run: ./gradlew test
+        working-directory: services/auth-service
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/auth_test_db
+          SPRING_DATASOURCE_USERNAME: testuser
+          SPRING_DATASOURCE_PASSWORD: testpass
+          # JWT 비밀 키는 테스트 전용 더미값 사용 (실제 키 아님)
+          JWT_SECRET_KEY: test-secret-key-for-ci-only-must-be-32chars
+
+  # ─────────────────────────────────────────
+  # Job 2: Docker 이미지 빌드 & 푸시 (CD)
+  # ─────────────────────────────────────────
+  build-and-push:
+    name: Docker 빌드 & 푸시
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Docker Hub 로그인
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Docker 이미지 빌드 & 푸시
+        uses: docker/build-push-action@v5
+        with:
+          context: services/auth-service
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+            ${{ secrets.DOCKER_USERNAME }}/auth-service:${{ github.sha }}
+
+  notify:
+    name: 배포 완료 알림
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: success()
+
+    steps:
+      - name: 배포 결과 출력
+        run: |
+          echo "✅ Auth Service 배포 완료!"
+          echo "이미지: ${{ secrets.DOCKER_USERNAME }}/auth-service:${{ github.sha }}"
+          echo "배포 시간: $(date)"
