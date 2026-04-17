@@ -11,10 +11,12 @@ on:
     branches: [ main ]
     paths:
       - 'services/order-service/**'
+      - '.github/workflows/order-service.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'services/order-service/**'
+      - '.github/workflows/order-service.yml'
 
 jobs:
   # ─────────────────────────────────────────
