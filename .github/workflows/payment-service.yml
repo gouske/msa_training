@@ -48,6 +48,10 @@ jobs:
       - name: 테스트 실행
         run: python -m pytest tests/ -v
         working-directory: services/payment-service
+        env:
+          # main.py 가 모듈 로드 시점에 INTERNAL_API_KEY 존재를 요구 (fallback 없음).
+          # CI 테스트 전용 더미값 — 실제 배포 시크릿 아님.
+          INTERNAL_API_KEY: test-internal-api-key-for-ci-only
 
   # ─────────────────────────────────────────
   # Job 2: Docker 이미지 빌드 & 푸시 (CD)
