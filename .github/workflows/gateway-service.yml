@@ -11,10 +11,12 @@ on:
     branches: [ main ]
     paths:
       - 'services/gateway-service/**'
+      - '.github/workflows/gateway-service.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'services/gateway-service/**'
+      - '.github/workflows/gateway-service.yml'
 
 jobs:
   # ─────────────────────────────────────────
@@ -52,7 +54,8 @@ jobs:
         working-directory: services/gateway-service
         env:
           # 테스트용 JWT 설정 (실제 키 아님)
-          Jwt__SecretKey: test-secret-key-for-ci-only-must-be-32chars
+          # appsettings.json / JwtAuthenticationTests.TestSecretKey 와 일치해야 토큰 서명 검증이 통과함
+          Jwt__SecretKey: default-local-test-key-1234567890
 
   # ─────────────────────────────────────────
   # Job 2: Docker 이미지 빌드 & 푸시 (CD)

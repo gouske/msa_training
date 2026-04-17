@@ -11,10 +11,12 @@ on:
     branches: [ main ]
     paths:
       - 'services/auth-service/**'
+      - '.github/workflows/auth-service.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'services/auth-service/**'
+      - '.github/workflows/auth-service.yml'
 
 jobs:
   # ─────────────────────────────────────────
