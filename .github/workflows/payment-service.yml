@@ -1,0 +1,95 @@
+# [GitHub Actions] Payment Service CI/CD 파이프라인
+#
+# 트리거 조건: services/payment-service/ 하위 파일이 변경된 경우만 실행
+# CI: Python 3.13 + pytest
+# CD: Docker 이미지 빌드 → Docker Hub 푸시 (main 브랜치 push 시)
+
+name: Payment Service CI/CD
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/payment-service/**'
+      - '.github/workflows/payment-service.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/payment-service/**'
+      - '.github/workflows/payment-service.yml'
+
+jobs:
+  # ─────────────────────────────────────────
+  # Job 1: 테스트 실행 (CI)
+  # ─────────────────────────────────────────
+  test:
+    name: 테스트 실행
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      # Python 3.13 설치 (로컬 환경과 동일한 버전)
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: services/payment-service/requirements.txt
+
+      # requirements.txt 에 명시된 모든 의존성 설치
+      # pytest + pytest-asyncio + pytest-httpx 포함되어 있음
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+        working-directory: services/payment-service
+
+      # pytest 실행 (-v: 테스트별 상세 결과 출력)
+      - name: 테스트 실행
+        run: python -m pytest tests/ -v
+        working-directory: services/payment-service
+        env:
+          # main.py 가 모듈 로드 시점에 INTERNAL_API_KEY 존재를 요구 (fallback 없음).
+          # CI 테스트 전용 더미값 — 실제 배포 시크릿 아님.
+          INTERNAL_API_KEY: test-internal-api-key-for-ci-only
+
+  # ─────────────────────────────────────────
+  # Job 2: Docker 이미지 빌드 & 푸시 (CD)
+  # ─────────────────────────────────────────
+  build-and-push:
+    name: Docker 빌드 & 푸시
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Docker Hub 로그인
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Docker 이미지 빌드 & 푸시
+        uses: docker/build-push-action@v5
+        with:
+          context: services/payment-service
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/payment-service:latest
+            ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
+
+  notify:
+    name: 배포 완료 알림
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: success()
+
+    steps:
+      - name: 배포 결과 출력
+        run: |
+          echo "✅ Payment Service 배포 완료!"
+          echo "이미지: ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}"
+          echo "배포 시간: $(date)"
