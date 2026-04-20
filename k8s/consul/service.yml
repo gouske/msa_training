@@ -1,0 +1,21 @@
+# [K8s] Consul Service
+# 클러스터 내부 전용(ClusterIP). 외부에서 UI 에 접근하려면
+# `kubectl port-forward svc/consul 8500:8500` 으로 포트 포워딩해서 쓴다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: msa-training
+  labels:
+    app: consul
+spec:
+  type: ClusterIP
+  selector:
+    app: consul
+  ports:
+    - name: http
+      port: 8500
+      targetPort: 8500
+    - name: dns
+      port: 8600
+      targetPort: 8600

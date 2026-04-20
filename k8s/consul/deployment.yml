@@ -1,0 +1,61 @@
+# [K8s] Consul Deployment
+# Gateway 가 Consul 폴링 결과로 라우팅 대상을 결정하므로
+# 반드시 클러스터에 존재해야 한다. 개발/학습용 단일 Pod 구성(-dev 모드).
+# 운영에서는 StatefulSet + 멀티 노드 Raft 클러스터로 구성해야 한다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consul
+  namespace: msa-training
+  labels:
+    app: consul
+    context: platform   # 횡단 플랫폼 컴포넌트
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consul
+  strategy:
+    # 단일 Pod 이므로 Recreate — RollingUpdate 시 Raft 리더십 이전 문제 회피
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: consul
+    spec:
+      containers:
+        - name: consul
+          image: hashicorp/consul:1.18
+          args:
+            - "agent"
+            - "-dev"
+            - "-client=0.0.0.0"
+            - "-ui"
+          ports:
+            - name: http
+              containerPort: 8500
+            - name: dns
+              containerPort: 8600
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          # Consul 은 자체 `/v1/status/leader` 로 클러스터 준비 상태를 알린다.
+          livenessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: 8500
+            initialDelaySeconds: 10
+            periodSeconds: 30
+
+          readinessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: 8500
+            initialDelaySeconds: 5
+            periodSeconds: 10
