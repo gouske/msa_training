@@ -52,4 +52,45 @@ describe('normalizeCorrelationId', () => {
         expect(a).toMatch(UUID_V4_REGEX);
         expect(b).toMatch(UUID_V4_REGEX);
     });
+
+    describe('부정 입력 치환 시 WARN 로그', () => {
+        let warnSpy;
+        beforeEach(() => {
+            warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        });
+        afterEach(() => {
+            warnSpy.mockRestore();
+        });
+
+        test('형식 불일치 문자열이 들어오면 console.warn 1회 호출', () => {
+            normalizeCorrelationId('a'.repeat(65));
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0][0]).toMatch(/부정 입력 치환/);
+            expect(warnSpy.mock.calls[0][0]).toMatch(/len=65/);
+        });
+
+        test('비문자열 타입이 들어오면 타입을 노출하며 WARN', () => {
+            normalizeCorrelationId(12345);
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0][0]).toMatch(/type=number/);
+        });
+
+        test('원본 문자열 값 자체는 로그에 찍지 않는다 (로그 인젝션 방지)', () => {
+            const malicious = 'abc\r\nX-Evil-Header: injected';
+            normalizeCorrelationId(malicious);
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            const logged = warnSpy.mock.calls[0][0];
+            expect(logged).not.toContain(malicious);
+            expect(logged).not.toContain('X-Evil-Header');
+        });
+
+        test.each([
+            ['null', null],
+            ['undefined', undefined],
+            ['빈 문자열', ''],
+        ])('누락(%s)은 정상 흐름이므로 로그 생략', (_, value) => {
+            normalizeCorrelationId(value);
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+    });
 });

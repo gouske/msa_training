@@ -72,3 +72,57 @@ class TestRejectedInputs:
         assert first != second
         assert UUID_V4_REGEX.match(first)
         assert UUID_V4_REGEX.match(second)
+
+
+class TestReplacementLogging:
+    """치환 이벤트는 WARN 로그로 관측 가능해야 한다."""
+
+    def test_malformed_string_emits_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="infrastructure.correlation_id")
+
+        normalize_correlation_id("a" * 65)
+
+        records = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(records) == 1
+        assert "부정 입력 치환" in records[0].getMessage()
+        assert "len=65" in records[0].getMessage()
+
+    def test_non_string_type_included_in_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="infrastructure.correlation_id")
+
+        normalize_correlation_id(12345)
+
+        records = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(records) == 1
+        assert "type=int" in records[0].getMessage()
+
+    def test_original_value_not_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """로그 인젝션 방지 — 원본 문자열은 기록되지 않아야 한다."""
+        caplog.set_level("WARNING", logger="infrastructure.correlation_id")
+
+        malicious = "abc\r\nX-Evil-Header: injected"
+        normalize_correlation_id(malicious)
+
+        records = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert malicious not in message
+        assert "X-Evil-Header" not in message
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_missing_value_skips_logging(
+        self, caplog: pytest.LogCaptureFixture, value: object
+    ) -> None:
+        """누락(None/빈 문자열)은 정상 흐름이라 로그를 남기지 않는다."""
+        caplog.set_level("WARNING", logger="infrastructure.correlation_id")
+
+        normalize_correlation_id(value)
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings == []

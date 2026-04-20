@@ -165,15 +165,33 @@ var app = builder.Build();
 //     주문이 반복적으로 DLQ 로 이동(오염)될 위험이 있다.
 //   - 허용 charset = `[A-Za-z0-9_-]`, 길이 1~64 (UUID 36자 + 여유)
 //   - 검증 실패 시 서버 생성 UUID 로 치환 (요청 자체는 거부하지 않음 — 추적 가능성 유지)
+//   - 치환 발생 시 WARN 로그로 기록 → 공격 시도/포맷 회귀 관측 가능
+//     (원본 값은 기록하지 않음 — 로그 인젝션 방지, 길이만 노출)
 var correlationIdPattern = new Regex(@"^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
+var correlationIdLogger = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("CorrelationId");
 
 app.Use(async (context, next) =>
 {
     // 1) 클라이언트가 헤더를 보냈으면 검증, 통과 시 재사용 / 실패 시 새 UUID 생성
     var inboundId = context.Request.Headers["X-Correlation-ID"].ToString();
-    var correlationId = correlationIdPattern.IsMatch(inboundId)
-        ? inboundId
-        : Guid.NewGuid().ToString();
+    string correlationId;
+    if (correlationIdPattern.IsMatch(inboundId))
+    {
+        correlationId = inboundId;
+    }
+    else
+    {
+        correlationId = Guid.NewGuid().ToString();
+        // 비어있지 않은 입력이 규칙 불일치 → 부정 입력으로 간주하고 WARN 기록.
+        // 빈 값(헤더 누락)은 정상 흐름이므로 로그 생략.
+        if (!string.IsNullOrEmpty(inboundId))
+        {
+            correlationIdLogger.LogWarning(
+                "X-Correlation-ID 부정 입력 치환 — 원본 길이={InboundLength}, 치환 ID={CorrelationId}",
+                inboundId.Length, correlationId);
+        }
+    }
 
     // 2) 다운스트림으로 흘려보낼 헤더는 항상 검증된 값으로 덮어쓴다.
     //    Headers 인덱서 할당은 기존 값을 교체한다 — 외부 부정 입력 차단.

@@ -3,6 +3,7 @@ package com.example.auth.config
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.filter.OncePerRequestFilter
@@ -23,17 +24,33 @@ class JwtAuthenticationFilter(
 ) : OncePerRequestFilter() {
 
     companion object {
+        private val log = LoggerFactory.getLogger(JwtAuthenticationFilter::class.java)
+
         /**
          * [Issue #8] 허용 Correlation ID 형식.
          *   - charset: URL-safe (`A-Za-z0-9_-`)
          *   - 길이: 1 ~ 64 (UUID v4 36자 + 여유)
          * Gateway 를 거치지 않은 내부 호출(디버깅/직접 호출) 에도 방어적으로 검증한다.
+         *
+         * 부정 입력(길이 불일치/charset 불일치) 치환 시 WARN 로그를 남긴다.
+         * 원본 값은 로그에 기록하지 않고(로그 인젝션 방지) 길이만 노출한다.
+         * 누락(null/빈 문자열) 은 정상 흐름이라 로그를 생략한다.
          */
         private val CORRELATION_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,64}\$")
 
-        private fun normalizeCorrelationId(raw: String?): String =
-            if (raw != null && CORRELATION_ID_PATTERN.matches(raw)) raw
-            else UUID.randomUUID().toString()
+        internal fun normalizeCorrelationId(raw: String?): String {
+            if (raw != null && CORRELATION_ID_PATTERN.matches(raw)) return raw
+
+            val replacement = UUID.randomUUID().toString()
+            if (!raw.isNullOrEmpty()) {
+                log.warn(
+                    "correlation_id 부정 입력 치환 — 원본 길이={}, 치환 ID={}",
+                    raw.length,
+                    replacement
+                )
+            }
+            return replacement
+        }
     }
 
     override fun doFilterInternal(

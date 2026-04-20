@@ -18,6 +18,12 @@ const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * 검증/정규화된 Correlation ID 를 반환한다.
+ *
+ * 부정 입력(형식 불일치 문자열, 비문자열)이 들어오면 WARN 로그를 남겨
+ * 공격 시도/포맷 회귀를 운영에서 관측할 수 있게 한다.
+ * 원본 값은 로그에 찍지 않는다 — 로그 인젝션 방지를 위해 길이/타입만 노출.
+ * 누락(undefined/null/빈 문자열)은 정상 흐름이라 로그 생략.
+ *
  * @param {unknown} value 외부에서 전달된 원시 값 (헤더, 메시지 본문 등)
  * @returns {string}
  */
@@ -25,7 +31,16 @@ function normalizeCorrelationId(value) {
     if (typeof value === 'string' && CORRELATION_ID_PATTERN.test(value)) {
         return value;
     }
-    return randomUUID();
+    const replacement = randomUUID();
+    if (value !== undefined && value !== null && value !== '') {
+        const descriptor = typeof value === 'string'
+            ? `len=${value.length}`
+            : `type=${typeof value}`;
+        console.warn(
+            `[correlation-id] 부정 입력 치환 — ${descriptor} → ${replacement}`
+        );
+    }
+    return replacement;
 }
 
 module.exports = { normalizeCorrelationId, CORRELATION_ID_PATTERN };
