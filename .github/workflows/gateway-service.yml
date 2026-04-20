@@ -29,11 +29,11 @@ jobs:
 
     steps:
       - name: 레포지토리 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # .NET 8 SDK 설치
       - name: .NET 8 SDK 설정
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
 
@@ -68,16 +68,16 @@ jobs:
 
     steps:
       - name: 레포지토리 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Docker Hub 로그인
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Docker 이미지 빌드 & 푸시
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: services/gateway-service/GatewayService
           push: true
