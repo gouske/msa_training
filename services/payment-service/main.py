@@ -25,6 +25,8 @@ from pydantic import BaseModel
 from infrastructure.consul_registrar import register, deregister
 # [실전 #6] Consul 서비스 조회 모듈 — Order 콜백 대상 주소를 동적으로 결정
 from infrastructure.consul_lookup import find_instance, OrderUnreachableError
+# [Issue #8] Correlation ID 검증 헬퍼 — 부정 입력으로 인한 콜백 실패/DLQ 오염 방지
+from infrastructure.correlation_id import normalize_correlation_id
 
 # --- 환경 변수 ---
 # [실전 #6] ORDER_SERVICE_URL 제거 — 이제 Consul을 통해 동적으로 Order 인스턴스를 찾는다.
@@ -64,9 +66,11 @@ def on_order_message(ch, method, properties, body):
     # body는 bytes 타입이므로 JSON으로 파싱합니다.
     order_data = json.loads(body)
     order_id = order_data["orderId"]
-    # [제20강] RabbitMQ 메시지 본문에서 correlationId를 꺼냅니다.
-    # HTTP 헤더는 큐를 통과하면 사라지므로, Order Service가 본문에 포함시켜 보낸 값을 읽습니다.
-    correlation_id = order_data.get("correlationId", "")
+    # [제20강 / Issue #8] RabbitMQ 메시지 본문에서 correlationId 를 꺼낸 뒤
+    # HTTP 헤더에 재주입하기 전에 반드시 검증한다. 외부 클라이언트가 Gateway 우회로
+    # 부정 값을 주입했을 가능성을 고려해 defense in depth 로 한 번 더 정규화.
+    # 형식 불일치면 서버 생성 UUID 로 치환 — 콜백 실패 → DLQ 오염 경로 차단.
+    correlation_id = normalize_correlation_id(order_data.get("correlationId"))
     print(f" [v] 결제 서비스: 주문 메시지 수신됨 orderId={order_id} correlationId={correlation_id}")
 
     # 결제 처리 실행

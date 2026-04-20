@@ -131,4 +131,59 @@ public class CorrelationIdTests : IClassFixture<WebApplicationFactory<Program>>
         var returned = response.Headers.GetValues("X-Correlation-ID").First();
         Assert.Equal(myCorrelationId, returned);
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // [Issue #8] 부정 입력 검증 — 악의적 헤더는 서버 생성 UUID 로 치환되어야 함
+    // 허용 규칙: ^[A-Za-z0-9_-]{1,64}$
+    // ══════════════════════════════════════════════════════════════
+
+    // ──────────────────────────────────────────────────────────────
+    // 테스트 4: 과대 길이(65자 초과) 입력 → 서버에서 새 UUID 로 치환
+    // ──────────────────────────────────────────────────────────────
+    [Fact]
+    public async Task 너무_긴_CorrelationId는_새_UUID로_치환된다()
+    {
+        // Arrange: 허용 한도(64자)를 초과하는 ID
+        var tooLong = new string('a', 65);
+        var request = new HttpRequestMessage(HttpMethod.Get, "/auth/health");
+        request.Headers.Add("X-Correlation-ID", tooLong);
+
+        // Act
+        var response = await _client.SendAsync(request);
+
+        // Assert: 응답 헤더 값은 보낸 값이 아니라 새 UUID 여야 한다
+        var returned = response.Headers.GetValues("X-Correlation-ID").First();
+        Assert.NotEqual(tooLong, returned);
+        Assert.True(
+            Guid.TryParse(returned, out _),
+            $"새 UUID 로 치환되어야 하는데 '{returned}' 가 왔습니다.");
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 테스트 5: 허용 charset 외 문자(제어문자/비ASCII) → 서버에서 새 UUID 로 치환
+    // ──────────────────────────────────────────────────────────────
+    [Theory]
+    [InlineData("abc\r\ninjected")]          // CRLF — 헤더 스머글링 시도
+    [InlineData("trace\u0001control")]        // NUL 계열 제어문자
+    [InlineData("한글-is-not-allowed")]       // 비ASCII
+    [InlineData("with space")]                // 공백 불허
+    [InlineData("semi;colon")]                // 구분자 불허
+    public async Task 허용_charset_외_CorrelationId는_새_UUID로_치환된다(string malicious)
+    {
+        // Arrange
+        // HttpRequestMessage.Headers.Add 는 제어문자 포함 시 예외를 던질 수 있으므로
+        // TryAddWithoutValidation 으로 raw 값을 그대로 싣는다.
+        var request = new HttpRequestMessage(HttpMethod.Get, "/auth/health");
+        Assert.True(request.Headers.TryAddWithoutValidation("X-Correlation-ID", malicious));
+
+        // Act
+        var response = await _client.SendAsync(request);
+
+        // Assert: 치환된 응답 값은 반드시 허용 규칙을 만족해야 한다
+        var returned = response.Headers.GetValues("X-Correlation-ID").First();
+        Assert.NotEqual(malicious, returned);
+        Assert.True(
+            Guid.TryParse(returned, out _),
+            $"새 UUID 로 치환되어야 하는데 '{returned}' 가 왔습니다.");
+    }
 }
