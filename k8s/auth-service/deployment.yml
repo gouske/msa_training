@@ -54,6 +54,14 @@ spec:
                 secretKeyRef:
                   name: msa-secrets
                   key: JWT_SECRET_KEY
+            # [제22강] Consul 등록용 — Gateway 가 Consul 폴링으로 auth 인스턴스를 찾는다
+            - name: CONSUL_HOST
+              value: "consul"
+            - name: CONSUL_PORT
+              value: "8500"
+            # 클러스터 내부에서 다른 Pod 가 접근할 때 쓸 호스트네임
+            - name: CONSUL_SERVICE_ADDRESS
+              value: "auth-service"
 
           # JVM 은 메모리를 더 사용하므로 Order/Payment 보다 높게 설정
           resources:

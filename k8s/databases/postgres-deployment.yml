@@ -1,9 +1,28 @@
-# [K8s] PostgreSQL Deployment + Service (Auth Service 전용 DB)
-# ⚠️  학습/개발 환경용. 프로덕션에서는 Amazon RDS, Cloud SQL 등 관리형 DB 서비스를 사용한다.
+# [K8s] PostgreSQL Deployment + PVC + Service (Auth Service 전용 DB)
+# ⚠️  학습/개발 환경용. 프로덕션에서는 Amazon RDS, Cloud SQL 등 관리형 DB 를 사용한다.
 #
 # StatefulSet vs Deployment:
-#   - DB 는 상태가 있으므로 StatefulSet 이 이상적이나, 학습 단순화를 위해 Deployment 사용
-#   - 프로덕션에서는 StatefulSet + PersistentVolume 을 사용할 것
+#   - DB 는 상태가 있으므로 StatefulSet 이 정석이나, 학습 단순화를 위해 Deployment + PVC 로 대체
+#   - PVC 로 데이터 영속화는 확보했지만, Pod 순서 보장·고정 네트워크 ID 등
+#     StatefulSet 이 제공하는 나머지 이점은 누락됨
+---
+# PersistentVolumeClaim: Pod 재시작/재스케줄링 시에도 데이터 보존
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: auth-db-data
+  namespace: msa-training
+  labels:
+    app: auth-db
+spec:
+  accessModes:
+    - ReadWriteOnce        # 단일 노드에서만 read/write (대부분의 블록 스토리지가 지원)
+  resources:
+    requests:
+      storage: 2Gi
+  # storageClassName 을 지정하지 않으면 클러스터의 default StorageClass 가 사용됨
+  # (minikube, kind, GKE, EKS 등 대부분 default 제공)
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -13,8 +32,12 @@ metadata:
   labels:
     app: auth-db
 spec:
-  # DB 는 단일 인스턴스로 운영 (단, StatefulSet 미사용으로 데이터 유실 위험 있음)
+  # DB 는 단일 인스턴스. PVC 가 ReadWriteOnce 이므로 replicas: 1 필수
   replicas: 1
+  strategy:
+    # 단일 PVC 를 공유하므로 RollingUpdate 시 두 Pod 가 동시에 볼륨에 쓰려다 실패
+    # → Recreate 로 기존 Pod 완전 종료 후 새 Pod 생성
+    type: Recreate
   selector:
     matchLabels:
       app: auth-db
@@ -46,6 +69,14 @@ spec:
                 secretKeyRef:
                   name: msa-secrets
                   key: POSTGRES_DB
+            # postgres 이미지가 실제 데이터를 저장하는 경로. PVC 마운트 위치와 일치시킨다.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          # PVC 를 /var/lib/postgresql/data 에 마운트해 데이터 영속화
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
 
           resources:
             requests:
@@ -55,17 +86,21 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
-          # PostgreSQL 준비 상태 확인: pg_isready 명령어 사용
+          # readinessProbe 는 Secret 에서 주입한 실제 계정/DB 이름을 참조
+          # 자격증명을 바꿔도 probe 가 깨지지 않도록 env 를 인용한다.
           readinessProbe:
             exec:
               command:
-                - pg_isready
-                - -U
-                - myuser
-                - -d
-                - auth_db
+                - /bin/sh
+                - -c
+                - 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
             initialDelaySeconds: 10
             periodSeconds: 10
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: auth-db-data
 
 ---
 # PostgreSQL Service: Auth Service 가 auth-db:5432 로 접근
