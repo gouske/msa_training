@@ -42,13 +42,13 @@ spec:
                 secretKeyRef:
                   name: msa-secrets
                   key: JWT_SECRET_KEY
-            # YARP 업스트림 주소: K8s Service 이름으로 접근
-            - name: ReverseProxy__Clusters__auth-cluster__Destinations__dest1__Address
-              value: "http://auth-service:8080/api/"
-            - name: ReverseProxy__Clusters__order-cluster__Destinations__dest1__Address
-              value: "http://order-service:8081/api/"
-            - name: ReverseProxy__Clusters__payment-cluster__Destinations__dest1__Address
-              value: "http://payment-service:8082/api/"
+            # [제22강] Consul 기반 동적 라우팅
+            # Gateway 는 ConsulProxyConfigProvider 로 auth/order/payment-service
+            # 엔드포인트를 폴링하여 YARP 클러스터를 갱신한다.
+            # appsettings.json 의 route ClusterId (auth-service / order-service / payment-service)
+            # 과 Consul 등록 service name 이 일치해야 한다.
+            - name: Consul__Address
+              value: "http://consul:8500"
 
           # .NET 은 메모리 효율이 좋으므로 적당한 값으로 설정
           resources:
