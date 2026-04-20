@@ -1,0 +1,14 @@
+# [K8s] Payment Service: 클러스터 내부 전용 Service
+# Order Service 와 Gateway 만 payment-service 에 접근하므로 ClusterIP 로 충분하다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: msa-training
+spec:
+  selector:
+    app: payment-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+  type: ClusterIP

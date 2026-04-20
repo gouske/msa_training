@@ -222,6 +222,11 @@ app.Use(async (context, next) =>
     await next();
 });
 
+// [제22강 추가] K8s livenessProbe/readinessProbe 용 헬스 체크 엔드포인트
+// YARP 보다 먼저 등록해야 YARP가 캡처하지 않는다.
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+    .AllowAnonymous();
+
 // 6단계: YARP 게이트웨이 활성화 (기존 코드)
 app.MapReverseProxy();
 

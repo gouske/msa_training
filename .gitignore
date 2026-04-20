@@ -34,5 +34,10 @@ obj/
 !.claude/agents/
 !.claude/settings.json
 
+# Kubernetes secrets (실제 값 포함 — 커밋 금지)
+# k8s/secrets.example.yml 만 저장소에 커밋하고,
+# 로컬에서 secrets.yml 로 복사해서 사용한다.
+k8s/secrets.yml
+
 # ETC
 docs/*
