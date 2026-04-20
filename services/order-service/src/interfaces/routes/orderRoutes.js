@@ -11,6 +11,7 @@
  *     (OrderServiceError를 import하지 않아 순환 의존 위험을 피합니다)
  */
 const express = require('express');
+const { normalizeCorrelationId } = require('../../utils/correlationId');
 
 /** OrderServiceError.code → HTTP 상태 코드 매핑 */
 const ERROR_STATUS_MAP = {
@@ -40,9 +41,10 @@ function createOrderRouter({ orderService, internalApiKey }) {
             });
         }
 
-        // [제20강] X-Correlation-ID 헤더를 읽어 서비스 계층으로 전달합니다.
-        // 헤더가 없으면 빈 문자열 — 도메인 계층은 HTTP 헤더를 직접 알 필요가 없습니다.
-        const correlationId = req.headers['x-correlation-id'] || '';
+        // [제20강 / Issue #8] X-Correlation-ID 헤더 검증 후 서비스 계층으로 전달.
+        // Gateway 가 1차 검증을 하지만, 내부 우회 경로(Order 직접 호출) 시 부정 입력을
+        // 차단하기 위해 defense in depth 로 한 번 더 정규화한다.
+        const correlationId = normalizeCorrelationId(req.headers['x-correlation-id']);
 
         const { itemId, quantity, price } = req.body;
         try {

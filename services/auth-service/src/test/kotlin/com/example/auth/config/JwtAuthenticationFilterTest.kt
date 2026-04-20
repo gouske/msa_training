@@ -113,4 +113,61 @@ class JwtAuthenticationFilterTest {
         // 스레드 풀 재사용 시 이전 요청의 ID가 누출되는 문제를 방지합니다.
         assertNull(MDC.get("correlationId"), "필터 완료 후 MDC에 correlationId가 남아 있습니다.")
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // [Issue #8] 부정 입력 검증 — 허용 규칙 `^[A-Za-z0-9_-]{1,64}$` 외는 새 UUID
+    // ══════════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("[Issue #8] 65자 초과 X-Correlation-ID 는 새 UUID 로 치환된다")
+    fun `너무 긴 Correlation ID 는 새 UUID 로 치환된다`() {
+        // Arrange
+        val tooLong = "a".repeat(65)
+        val request = MockHttpServletRequest()
+        val response = MockHttpServletResponse()
+        val chain = MockFilterChain()
+        request.addHeader("X-Correlation-ID", tooLong)
+
+        // Act
+        filter.doFilter(request, response, chain)
+
+        // Assert: 응답 헤더 값은 원본이 아니라 UUID 로 치환되어야 함
+        val returned = response.getHeader("X-Correlation-ID")
+        assertNotNull(returned)
+        assertNotEquals(tooLong, returned)
+        assertDoesNotThrow({ java.util.UUID.fromString(returned) }) {
+            "새 UUID 로 치환되어야 하는데 '$returned' 가 왔습니다."
+        }
+    }
+
+    @Test
+    @DisplayName("[Issue #8] 허용 charset 외 문자는 새 UUID 로 치환된다")
+    fun `허용 charset 외 문자는 새 UUID 로 치환된다`() {
+        // Arrange — CRLF, 공백, 비ASCII 등 부정 입력
+        val maliciousInputs = listOf(
+            "abc\r\ninjected",        // CRLF 헤더 스머글링
+            "trace id with space",    // 공백 불허
+            "한글-trace",              // 비ASCII
+            "a;b",                     // 세미콜론
+            "path/like"                // 슬래시
+        )
+
+        maliciousInputs.forEach { malicious ->
+            val request = MockHttpServletRequest()
+            val response = MockHttpServletResponse()
+            val chain = MockFilterChain()
+            request.addHeader("X-Correlation-ID", malicious)
+
+            // Act
+            filter.doFilter(request, response, chain)
+
+            // Assert
+            val returned = response.getHeader("X-Correlation-ID")
+            assertNotNull(returned)
+            assertNotEquals(malicious, returned, "부정 입력 '$malicious' 가 그대로 반환됨")
+            assertDoesNotThrow({ java.util.UUID.fromString(returned) }) {
+                "'$malicious' → UUID 치환 실패. 반환값: '$returned'"
+            }
+        }
+    }
 }

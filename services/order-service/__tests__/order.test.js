@@ -77,9 +77,11 @@ describe('POST /api/order (주문 생성)', () => {
         expect(res.status).toBe(202);
         expect(res.body.status).toBe('PENDING');
         expect(res.body.orderId).toBe('mock-order-id-123');
-        // [제20강] 5번째 인수: correlationId — 헤더 없으므로 빈 문자열
+        // [제20강 / Issue #8] 5번째 인수: 헤더가 없으면 normalizeCorrelationId 가
+        // 서버에서 새 UUID 를 발급한다 (부정 입력 방어 + 추적 가능성 유지).
         expect(mockOrderService.createOrder).toHaveBeenCalledWith(
-            'buyer@test.com', 'ITEM-001', 2, 15000, ''
+            'buyer@test.com', 'ITEM-001', 2, 15000,
+            expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
         );
     });
 

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 
@@ -152,19 +153,51 @@ var app = builder.Build();
 //   401 응답 헤더에 X-Correlation-ID가 포함되지 않습니다.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// [제20강] 1단계: Correlation ID 미들웨어 — 반드시 인증보다 먼저 등록합니다.
+// [제20강 / Issue #8] 1단계: Correlation ID 미들웨어 — 반드시 인증보다 먼저 등록합니다.
 // 역할: 모든 요청에 고유 ID를 붙여서, 여러 마이크로서비스를 거치는 요청을 하나로 추적합니다.
-// 흐름: 외부 클라이언트가 X-Correlation-ID를 보내면 그대로 사용하고,
-//       없으면 Gateway에서 새 UUID를 생성합니다. → 응답 헤더에도 동일한 ID를 돌려줍니다.
+// 흐름: 외부 클라이언트가 X-Correlation-ID를 보내면 검증 후 통과 시 재사용,
+//       없거나 형식이 부적합하면 Gateway에서 새 UUID를 생성합니다.
+//       → 응답 헤더에도 동일한 ID를 돌려줍니다.
+//
+// [Issue #8 보안 강화]
+//   - 외부 입력을 그대로 다운스트림에 전파하면 악의적 값(과대길이/제어문자/비ASCII)이
+//     Order/Payment 의 헤더 파싱 또는 RabbitMQ 메시지 처리를 방해할 수 있어
+//     주문이 반복적으로 DLQ 로 이동(오염)될 위험이 있다.
+//   - 허용 charset = `[A-Za-z0-9_-]`, 길이 1~64 (UUID 36자 + 여유)
+//   - 검증 실패 시 서버 생성 UUID 로 치환 (요청 자체는 거부하지 않음 — 추적 가능성 유지)
+//   - 치환 발생 시 WARN 로그로 기록 → 공격 시도/포맷 회귀 관측 가능
+//     (원본 값은 기록하지 않음 — 로그 인젝션 방지, 길이만 노출)
+var correlationIdPattern = new Regex(@"^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
+var correlationIdLogger = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("CorrelationId");
+
 app.Use(async (context, next) =>
 {
-    // 1) 클라이언트가 헤더를 보냈으면 재사용, 없으면 새 UUID 생성
-    if (!context.Request.Headers.ContainsKey("X-Correlation-ID"))
-        context.Request.Headers["X-Correlation-ID"] = Guid.NewGuid().ToString();
+    // 1) 클라이언트가 헤더를 보냈으면 검증, 통과 시 재사용 / 실패 시 새 UUID 생성
+    var inboundId = context.Request.Headers["X-Correlation-ID"].ToString();
+    string correlationId;
+    if (correlationIdPattern.IsMatch(inboundId))
+    {
+        correlationId = inboundId;
+    }
+    else
+    {
+        correlationId = Guid.NewGuid().ToString();
+        // 비어있지 않은 입력이 규칙 불일치 → 부정 입력으로 간주하고 WARN 기록.
+        // 빈 값(헤더 누락)은 정상 흐름이므로 로그 생략.
+        if (!string.IsNullOrEmpty(inboundId))
+        {
+            correlationIdLogger.LogWarning(
+                "X-Correlation-ID 부정 입력 치환 — 원본 길이={InboundLength}, 치환 ID={CorrelationId}",
+                inboundId.Length, correlationId);
+        }
+    }
 
-    var correlationId = context.Request.Headers["X-Correlation-ID"].ToString();
+    // 2) 다운스트림으로 흘려보낼 헤더는 항상 검증된 값으로 덮어쓴다.
+    //    Headers 인덱서 할당은 기존 값을 교체한다 — 외부 부정 입력 차단.
+    context.Request.Headers["X-Correlation-ID"] = correlationId;
 
-    // 2) 응답 헤더에도 동일한 ID를 추가 → 클라이언트가 자신의 요청을 추적할 수 있습니다.
+    // 3) 응답 헤더에도 동일한 ID를 추가 → 클라이언트가 자신의 요청을 추적할 수 있습니다.
     //    OnStarting: 응답 본문이 쓰이기 직전에 실행되므로 401/403 응답에도 헤더가 포함됩니다.
     context.Response.OnStarting(() =>
     {
