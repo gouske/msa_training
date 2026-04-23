@@ -54,4 +54,41 @@ public class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
         var status = doc.RootElement.GetProperty("status").GetString();
         Assert.Equal("healthy", status);
     }
+
+    /// <summary>
+    /// [Issue #11] /health/ready 는 Consul 폴링 전에는 503 을 반환해야 한다.
+    /// WebApplicationFactory 환경에서는 외부 Consul 가 없으므로 cluster 가 비어
+    /// 모든 필수 cluster (auth-service / order-service / payment-service) 가 누락 상태다.
+    /// → 트래픽을 받기 전에 K8s readinessProbe 가 NotReady 로 마킹할 수 있어야 한다.
+    /// </summary>
+    [Fact]
+    public async Task HealthReady_ReturnsServiceUnavailable_BeforeConsulPolling()
+    {
+        var response = await _client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal("not_ready", doc.RootElement.GetProperty("status").GetString());
+        var missing = doc.RootElement.GetProperty("missingClusters")
+            .EnumerateArray()
+            .Select(e => e.GetString())
+            .ToArray();
+        Assert.Contains("auth-service", missing);
+        Assert.Contains("order-service", missing);
+        Assert.Contains("payment-service", missing);
+    }
+
+    /// <summary>
+    /// /health/ready 도 인증 없이 접근 가능해야 한다 (K8s probe 는 토큰 없이 호출).
+    /// </summary>
+    [Fact]
+    public async Task HealthReady_AccessibleWithoutJwt()
+    {
+        var response = await _client.GetAsync("/health/ready");
+
+        // 인증 실패면 401 이어야 함 — 503 인 한 익명 접근이 허용된 것.
+        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

@@ -255,11 +255,15 @@ describe('POST /api/order/callback (결제 결과 콜백)', () => {
 
 describe('GET /api/order/health (헬스 체크)', () => {
 
-    test('서비스 상태 OK를 반환한다', async () => {
+    // [Issue #13] /health 는 DB 연결 상태를 반영해야 한다.
+    // 기존 createTestApp 은 isDbConnected 를 주입하지 않으므로 기본값(mongoose 실제 상태)을 사용,
+    // 테스트 환경에서는 disconnected → 503 이 정상 동작이다.
+    // healthy 케이스는 __tests__/health.test.js 에서 isDbConnected:()=>true 를 주입해 검증한다.
+    test('테스트 환경에서는 Mongo 미연결이라 503 + status:unhealthy 를 반환한다', async () => {
         const res = await request(createTestApp(mockOrderService))
             .get('/api/order/health');
 
-        expect(res.status).toBe(200);
-        expect(res.body.status).toBe('OK');
+        expect(res.status).toBe(503);
+        expect(res.body).toMatchObject({ status: 'unhealthy', db: 'down' });
     });
 });

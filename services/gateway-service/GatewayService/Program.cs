@@ -132,6 +132,12 @@ builder.Services.AddHostedService(sp => new GatewayService.Discovery.ConsulPolli
 // 5. YARP 등록 — 등록된 IProxyConfigProvider 자동 사용 (LoadFromConfig 호출하지 않음)
 builder.Services.AddReverseProxy();
 
+// [Issue #11] readiness 검사기 — 필수 cluster 가 모두 라우팅 가능해야 200 을 반환한다.
+// pollingServices 와 동일한 목록을 사용 → "Consul 에서 폴링 중인 서비스가 모두 healthy 인스턴스 ≥ 1" 일 때 ready.
+builder.Services.AddSingleton(sp => new GatewayService.Discovery.ReadinessChecker(
+    sp.GetRequiredService<Yarp.ReverseProxy.Configuration.IProxyConfigProvider>(),
+    pollingServices));
+
 var app = builder.Build();
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -255,10 +261,26 @@ app.Use(async (context, next) =>
     await next();
 });
 
-// [제22강 추가] K8s livenessProbe/readinessProbe 용 헬스 체크 엔드포인트
+// [제22강 추가] K8s livenessProbe 용 헬스 체크 엔드포인트.
+// 프로세스 생존만 확인 — DB/Consul 상태 무관하게 200 을 반환한다.
 // YARP 보다 먼저 등록해야 YARP가 캡처하지 않는다.
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .AllowAnonymous();
+
+// [Issue #11] K8s readinessProbe 전용 엔드포인트.
+// auth/order/payment cluster 모두 ≥1 destination 을 보유할 때만 200 을 반환한다.
+// 그렇지 않으면 503 + 누락 cluster 목록 → Service endpoint 에서 자동으로 제외돼 트래픽이 격리된다.
+app.MapGet("/health/ready", (GatewayService.Discovery.ReadinessChecker checker) =>
+{
+    var result = checker.Check();
+    if (result.IsReady)
+    {
+        return Results.Ok(new { status = "ready", missingClusters = Array.Empty<string>() });
+    }
+    return Results.Json(
+        new { status = "not_ready", missingClusters = result.MissingClusters },
+        statusCode: StatusCodes.Status503ServiceUnavailable);
+}).AllowAnonymous();
 
 // 6단계: YARP 게이트웨이 활성화 (기존 코드)
 app.MapReverseProxy();
