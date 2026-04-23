@@ -60,7 +60,10 @@ spec:
               memory: "256Mi"
 
           # [제22강] /health 엔드포인트 기반 HTTP 프로브
-          # tcpSocket 보다 정확: 앱이 실제로 요청을 처리할 수 있는지 확인
+          # [Issue #11] liveness / readiness 를 분리하여 readiness 정확도를 끌어올린다.
+          #
+          # livenessProbe: 프로세스 생존 확인 (앱이 살아있는가?)
+          # → /health 는 정적으로 200 을 반환하므로 Consul / 백엔드 상태와 무관.
           livenessProbe:
             httpGet:
               path: /health
@@ -68,9 +71,11 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 30
 
+          # readinessProbe: 라우팅 가능 상태 확인 (auth/order/payment cluster 모두 ≥1 destination?)
+          # → /health/ready 가 503 이면 Service endpoint 에서 자동 제외되어 트래픽이 격리된다.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 9000
             initialDelaySeconds: 10
             periodSeconds: 10
