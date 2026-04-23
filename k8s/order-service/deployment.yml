@@ -71,17 +71,18 @@ spec:
               cpu: "500m"      # 0.5 CPU 코어
               memory: "256Mi"  # 256MB
 
-          # livenessProbe: Pod 가 살아있는지 확인
-          # 연속 실패 시 Pod 를 재시작한다.
+          # [Issue #13] liveness 와 readiness 의 의미를 분리.
+          #
+          # livenessProbe: Pod 프로세스 생존 확인 — TCP 연결만 확인하여 DB 단절 시 재시작 루프를 피한다.
+          # (/api/order/health 는 이제 DB 상태를 반영하므로 livenessProbe 로 쓰면 DB 장애 시 Pod 가 무한 재시작된다.)
           livenessProbe:
-            httpGet:
-              path: /api/order/health
+            tcpSocket:
               port: 8081
-            initialDelaySeconds: 15  # 컨테이너 시작 후 15초 대기 (Node.js 시작 빠름)
-            periodSeconds: 30        # 30초마다 확인
+            initialDelaySeconds: 15
+            periodSeconds: 30
 
-          # readinessProbe: 트래픽을 받을 준비가 됐는지 확인
-          # 실패 시 Service 에서 제외 (재시작이 아니라 격리)
+          # readinessProbe: 트래픽을 받을 수 있는 상태인지 확인
+          # — /api/order/health 가 MongoDB 연결 상태를 반영 (503 이면 Service 에서 격리).
           readinessProbe:
             httpGet:
               path: /api/order/health

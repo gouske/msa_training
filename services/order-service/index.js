@@ -63,25 +63,40 @@ app.use('/api/order', orderRouter);
 // -----------------------------------------------------------
 // DB 연결 + 서버 시작
 // -----------------------------------------------------------
+// [Issue #13] fail-fast — MongoDB 연결 실패 시 프로세스 종료.
+//
+// 이전: .catch(err => console.log(err)) 만 호출하여 연결 실패에도 Express 가 떴다.
+//       그 결과 K8s 는 Pod 를 Ready 로 보고, 모든 주문 요청이 500 으로 실패했다.
+// 현재: mongoose.connect() 가 실패하면 process.exit(1) 으로 즉시 종료한다.
+//       K8s 는 CrashLoopBackOff 로 인지하여 재시작 간격을 자동으로 늘리고,
+//       장애 가시성이 명확해진다.
 mongoose.connect(mongoURI)
-    .then(() => console.log('MongoDB Connected...'))
-    .catch(err => console.log(err));
-
-app.listen(PORT, () => {
-    console.log(`🚀 주문 서비스가 http://localhost:${PORT} 에서 시작되었습니다.`);
-
-    // [실전 #6] Consul 자기 등록
-    const consulUrl = `http://${process.env.CONSUL_HOST || 'localhost'}:${process.env.CONSUL_PORT || 8500}`;
-    const myHost = process.env.CONSUL_SERVICE_ADDRESS || process.env.HOSTNAME || 'order-service';
-    register({
-        consulUrl,
-        name: 'order-service',
-        host: myHost,
-        port: PORT,
-        healthPath: '/api/order/health',
-    }).then((serviceId) => {
-        setupGracefulShutdown(consulUrl, serviceId);
-    }).catch((err) => {
-        console.warn('Consul 등록 실패 (무시):', err.message);
+    .then(() => {
+        console.log('MongoDB Connected...');
+        startHttpServer();
+    })
+    .catch((err) => {
+        console.error('🚨 MongoDB 연결 실패. 프로세스를 종료합니다.', err);
+        process.exit(1);
     });
-});
+
+function startHttpServer() {
+    app.listen(PORT, () => {
+        console.log(`🚀 주문 서비스가 http://localhost:${PORT} 에서 시작되었습니다.`);
+
+        // [실전 #6] Consul 자기 등록
+        const consulUrl = `http://${process.env.CONSUL_HOST || 'localhost'}:${process.env.CONSUL_PORT || 8500}`;
+        const myHost = process.env.CONSUL_SERVICE_ADDRESS || process.env.HOSTNAME || 'order-service';
+        register({
+            consulUrl,
+            name: 'order-service',
+            host: myHost,
+            port: PORT,
+            healthPath: '/api/order/health',
+        }).then((serviceId) => {
+            setupGracefulShutdown(consulUrl, serviceId);
+        }).catch((err) => {
+            console.warn('Consul 등록 실패 (무시):', err.message);
+        });
+    });
+}

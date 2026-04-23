@@ -11,6 +11,7 @@
  *     (OrderServiceError를 import하지 않아 순환 의존 위험을 피합니다)
  */
 const express = require('express');
+const mongoose = require('mongoose');
 const { normalizeCorrelationId } = require('../../utils/correlationId');
 
 /** OrderServiceError.code → HTTP 상태 코드 매핑 */
@@ -21,10 +22,31 @@ const ERROR_STATUS_MAP = {
 };
 
 /**
- * @param {{ orderService: OrderService, internalApiKey: string }} deps
+ * mongoose 의 readyState 의미 (참고용 상수):
+ *   0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+ * /health 는 1(connected) 만 정상으로 본다.
+ */
+const MONGOOSE_CONNECTED = 1;
+
+/**
+ * [Issue #13] /health 의 기본 DB 상태 검사기.
+ * mongoose 의 전역 connection 객체를 그대로 참조하여 K8s probe 가
+ * 실제 Mongo 연결 상태를 반영하도록 한다.
+ */
+function defaultIsDbConnected() {
+    return mongoose.connection.readyState === MONGOOSE_CONNECTED;
+}
+
+/**
+ * @param {object} deps
+ * @param {OrderService} deps.orderService 비즈니스 서비스
+ * @param {string} deps.internalApiKey Payment Service 와 공유하는 내부 키
+ * @param {() => boolean} [deps.isDbConnected] DB 연결 상태 검사기.
+ *   미주입 시 mongoose.connection.readyState === 1 을 기본 사용한다.
+ *   테스트에서는 격리를 위해 명시적으로 주입한다.
  * @returns {express.Router}
  */
-function createOrderRouter({ orderService, internalApiKey }) {
+function createOrderRouter({ orderService, internalApiKey, isDbConnected = defaultIsDbConnected }) {
     const router = express.Router();
 
     /**
@@ -98,11 +120,27 @@ function createOrderRouter({ orderService, internalApiKey }) {
 
     /**
      * GET /api/order/health
-     * 헬스 체크
+     * [Issue #13] DB 연결 상태를 반영하는 헬스 체크.
+     *
+     * 이전: 항상 200 OK 를 반환 → MongoDB 가 죽어도 K8s readinessProbe 는 Ready 로 유지됨.
+     * 현재: isDbConnected() 가 false 면 503 → Pod 가 NotReady 로 마킹돼 트래픽이 격리된다.
+     *
+     * 주의: liveness 와 readiness 가 같은 엔드포인트를 공유하면
+     *      DB 일시 단절 시 Pod 가 재시작될 수 있다. 운영 매니페스트는
+     *      liveness 는 단순한 프로세스 생존 검사로, readiness 는 본 엔드포인트로
+     *      분리하는 것을 권장한다 (k8s/order-service.yaml 참고).
      */
     router.get('/health', (req, res) => {
-        res.json({
-            status: 'OK',
+        if (!isDbConnected()) {
+            return res.status(503).json({
+                status: 'unhealthy',
+                db: 'down',
+                message: 'MongoDB 연결이 끊어져 있어 요청을 처리할 수 없습니다.',
+            });
+        }
+        return res.status(200).json({
+            status: 'healthy',
+            db: 'up',
             message: '✅ Order Service is Running on Node.js!',
         });
     });
