@@ -27,6 +27,8 @@ from infrastructure.consul_registrar import register, deregister
 from infrastructure.consul_lookup import find_instance, OrderUnreachableError
 # [Issue #8] Correlation ID 검증 헬퍼 — 부정 입력으로 인한 콜백 실패/DLQ 오염 방지
 from infrastructure.correlation_id import normalize_correlation_id
+# [제24강 Phase 2] Prometheus 메트릭 — RED + dependency gauge
+from infrastructure.metrics import create_metrics
 
 # --- 환경 변수 ---
 # [실전 #6] ORDER_SERVICE_URL 제거 — 이제 Consul을 통해 동적으로 Order 인스턴스를 찾는다.
@@ -143,6 +145,8 @@ def start_consumer():
                 pika.ConnectionParameters(host=RABBITMQ_HOST)
             )
             channel = connection.channel()
+            # [제24강 Phase 2] RabbitMQ 연결 성공 → dependency gauge = 1
+            metrics.dependencies.set_ready("rabbitmq", True)
 
             # [제21강 추가] DLQ(Dead Letter Queue) 선언
             # 처리에 실패한 메시지가 이동하는 "실패 보관함"입니다.
@@ -173,6 +177,8 @@ def start_consumer():
             channel.start_consuming() # 블로킹 루프 - 메시지가 올 때마다 콜백 실행
 
         except Exception as e:
+            # [제24강 Phase 2] RabbitMQ 연결/소비 실패 → dependency gauge = 0
+            metrics.dependencies.set_ready("rabbitmq", False)
             print(f"⚠️  RabbitMQ 연결 실패, 5초 후 재시도: {e}")
             time.sleep(5)
 
@@ -228,6 +234,14 @@ async def lifespan(app: FastAPI):
 
 # lifespan을 FastAPI 앱에 등록합니다.
 app = FastAPI(lifespan=lifespan)
+
+# [제24강 Phase 2] Prometheus 메트릭 — 미들웨어 + GET /api/payment/metrics 자동 등록.
+# Phase 1 (Order/Node) 와 동일한 라벨/패턴: route 정규화, self-scrape 제외, dependency gauge.
+# RabbitMQ 의존성 gauge 는 start_consumer 가 connect/실패 시점에 setReady 호출.
+metrics = create_metrics(service_name="payment-service", metrics_path="/api/payment/metrics")
+metrics.install(app)
+# 초기값 — 시계열이 적어도 한 번은 export 되어야 Grafana 가 패널을 표시한다.
+metrics.dependencies.set_ready("rabbitmq", False)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HTTP 엔드포인트 (동기 호출용 - 하위 호환 유지)
