@@ -1,0 +1,19 @@
+# ============================================================
+# [제24강] Grafana 대시보드 자동 provisioning
+# ============================================================
+# /etc/grafana/provisioning/dashboards/ 에 마운트하면 Grafana 가 부팅 시
+# /var/lib/grafana/dashboards/ 의 JSON 파일들을 자동 로드한다.
+# ============================================================
+
+apiVersion: 1
+
+providers:
+  - name: 'msa-training'
+    orgId: 1
+    folder: 'MSA Training'
+    type: file
+    disableDeletion: false
+    # 운영 변경을 막으려면 true — 학습용이므로 UI 편집 허용
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

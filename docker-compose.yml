@@ -339,6 +339,61 @@ services:
   #   ports:
   #     - "5432:5432"
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # [제24강] 메트릭/모니터링 — Prometheus + Grafana (Phase 1)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # 데이터 흐름:
+  #   각 서비스 /metrics  →  Prometheus scrape (15s)  →  Grafana 시각화
+  #
+  # Phase 1 활성화 대상: order-service 만 (Phase 2 에서 나머지 3 서비스 추가)
+  #
+  # 각 역할:
+  #   Prometheus = 시계열 DB + scrape 엔진 (metrics 를 주기적으로 pull)
+  #   Grafana    = 시각화 + 대시보드 + 알림 (운영자가 보는 화면)
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  # [시계열 DB] Prometheus: 각 서비스의 /metrics 를 주기적으로 호출하여 시계열로 저장
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    volumes:
+      # scrape 대상 정의 + 글로벌 설정
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 시계열 데이터 영속화 (down 후 재기동해도 메트릭 유지)
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"   # 웹 UI: http://localhost:9090
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'   # 학습용으로 7일 보존 (디스크 절약)
+      - '--web.enable-lifecycle'              # 설정 reload 를 HTTP POST 로 가능하게
+    restart: unless-stopped
+
+  # [시각화] Grafana: Prometheus 데이터로 대시보드 + 알림
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    environment:
+      # 학습용 기본 관리자 계정 — 운영에서는 반드시 환경변수/시크릿으로 교체
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # 첫 로그인 시 비밀번호 변경 강제 비활성 (학습 편의)
+      - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
+    volumes:
+      # datasource (Prometheus) 자동 등록
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      # 대시보드 provider 정의 + 실제 대시보드 JSON 파일 자동 로드
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Grafana 자체 데이터 (대시보드 편집 결과 등) 영속화
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"   # 웹 UI: http://localhost:3000 (admin / admin)
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # [볼륨 선언] 컨테이너가 삭제되어도 데이터가 유지되는 영구 저장소
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -346,3 +401,7 @@ volumes:
   # Elasticsearch 로그 데이터를 영구 보존합니다.
   # docker-compose down 후 다시 up 해도 기존 로그가 남아있습니다.
   elasticsearch-data:
+  # [제24강] Prometheus 시계열 데이터 (메트릭) 영속화
+  prometheus-data:
+  # [제24강] Grafana 사용자 편집 대시보드 / 사용자 / API 키 영속화
+  grafana-data:
