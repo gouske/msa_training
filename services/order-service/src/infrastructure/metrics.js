@@ -63,6 +63,25 @@ function createMetrics(options = {}) {
     });
 
     /**
+     * [Codex finding #2 반영] 외부 의존성(예: MongoDB) 의 연결 가용성 gauge.
+     *
+     * 왜 별도 메트릭이 필요한가:
+     *   Prometheus 의 `up` 메트릭은 scrape 성공 여부만 의미한다 — /metrics 가 200 이면 1.
+     *   그러나 우리 서비스는 Mongo 가 끊겨도 /metrics 자체는 정상 응답하므로 up=1 인 상태에서
+     *   주문 요청은 503 으로 실패할 수 있다 (= 거짓 양성).
+     *   별도 gauge 로 의존성 상태를 분리하면 대시보드/알림이 진짜 health 를 표현할 수 있다.
+     *
+     * 라벨 dependency 의 카디널리티는 의도적으로 낮게 유지 (mongodb / rabbitmq / consul 정도).
+     * 동적 값 (예: 호스트명) 을 라벨에 넣지 말 것.
+     */
+    const serviceDependencyReady = new client.Gauge({
+        name: 'service_dependency_ready',
+        help: '외부 의존성 연결 가용성 (1=ready, 0=not ready)',
+        labelNames: ['dependency'],
+        registers: [registry],
+    });
+
+    /**
      * Express 라우터 매칭이 끝난 시점의 라벨용 라우트 키를 계산한다.
      * 우선순위:
      *   1. req.route.path - 라우터 매칭이 성공한 경우 (/api/order/:id)
@@ -79,6 +98,15 @@ function createMetrics(options = {}) {
     /**
      * Express 미들웨어 — 모든 요청의 RED 메트릭을 자동 수집한다.
      * /metrics 엔드포인트 자체는 카운터 / 히스토그램 모두에서 제외한다.
+     *
+     * [Codex finding #3 반영] finish 와 close 둘 다 처리.
+     *   Node 의 응답 종료 이벤트는 시나리오마다 다르다:
+     *     - 정상 응답: finish → close 가 따라옴
+     *     - 클라이언트 중단 / upstream timeout / socket reset: close 만 발생, finish 없음
+     *   finish 만 listen 하면 비정상 종료 케이스가 그래프에서 사라져 장애 시 실패율을 과소계상한다.
+     *
+     *   once-guard (recorded 플래그) 로 같은 요청의 finish→close 가 이중 카운트되지 않게 한다.
+     *   응답이 정상 send 되지 않은 경우 status_code 라벨은 '0' 으로 분리해 운영자가 식별할 수 있게 한다.
      */
     function middleware(req, res, next) {
         // 메트릭 엔드포인트 자체는 측정 대상이 아니다.
@@ -88,19 +116,28 @@ function createMetrics(options = {}) {
         }
 
         // 응답 본문이 쓰이기 전에 시작 시점을 기록.
-        // res.on('finish') 시점에 라벨을 결정해야 req.route 가 채워진 상태가 된다.
+        // 라벨 결정은 응답 종료 시점 — 그래야 req.route 가 채워진 상태가 된다.
         const startNs = process.hrtime.bigint();
+        let recorded = false;
 
-        res.on('finish', () => {
+        function recordOutcome() {
+            if (recorded) return;
+            recorded = true;
+
             const route = resolveRouteLabel(req);
             const method = req.method;
-            const statusCode = String(res.statusCode);
+            // res.writableEnded === true 면 응답이 정상적으로 send 됨 → 실제 statusCode 사용.
+            // false (혹은 falsy) 면 클라이언트 중단/timeout 으로 응답이 끝까지 안 나감 → '0' 라벨링.
+            const statusCode = res.writableEnded ? String(res.statusCode) : '0';
 
             httpRequestsTotal.inc({ method, route, status_code: statusCode });
 
             const durationSec = Number(process.hrtime.bigint() - startNs) / 1e9;
             httpRequestDuration.observe({ method, route }, durationSec);
-        });
+        }
+
+        res.on('finish', recordOutcome);
+        res.on('close', recordOutcome);
 
         next();
     }
@@ -118,7 +155,18 @@ function createMetrics(options = {}) {
         }
     }
 
-    return { middleware, handler, registry };
+    /**
+     * [Codex finding #2 반영] 의존성 상태 업데이트 API.
+     * 호출 예: dependencies.setReady('mongodb', true) — Mongo 연결 시
+     *         dependencies.setReady('mongodb', false) — Mongo 단절 시
+     */
+    const dependencies = {
+        setReady(name, ready) {
+            serviceDependencyReady.set({ dependency: name }, ready ? 1 : 0);
+        },
+    };
+
+    return { middleware, handler, registry, dependencies };
 }
 
 module.exports = { createMetrics };

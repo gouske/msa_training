@@ -73,7 +73,8 @@
     },
     {
       "id": 4,
-      "title": "서비스 UP 상태 (1=정상, 0=다운)",
+      "title": "Prometheus Scrape Target Availability (/metrics 응답 여부)",
+      "description": "주의: 이 패널은 /metrics 엔드포인트의 scrape 성공 여부만 보여줍니다. 프로세스가 살아있고 /metrics 가 200 이면 1 이 됩니다 — DB 단절로 비즈니스 요청이 503 이어도 1 로 남을 수 있습니다. 진짜 의존성 상태는 아래 'Service Dependency Readiness' 패널을 보세요.",
       "type": "stat",
       "datasource": "Prometheus",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
@@ -92,6 +93,35 @@
               { "color": "green", "value": 1 }
             ]
           }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Service Dependency Readiness (DB / 외부 의존성 진짜 상태)",
+      "description": "각 서비스의 외부 의존성(MongoDB 등) 연결 상태. Prometheus up 과 달리 실제 의존성 가용성을 반영합니다. 0 = 단절, 1 = 정상.",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "service_dependency_ready",
+          "legendFormat": "{{job}} -> {{dependency}} ({{instance}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "READY", "color": "green" } } }
+          ]
         }
       }
     }
