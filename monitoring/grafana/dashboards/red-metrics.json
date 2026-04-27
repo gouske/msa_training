@@ -1,0 +1,129 @@
+{
+  "title": "MSA Training - RED Metrics",
+  "uid": "msa-red-metrics",
+  "tags": ["msa-training", "red", "phase1"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(http_requests_total, service)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Rate — 초당 요청 수 (route 별)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(http_requests_total{service=~\"$service\"}[1m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 2,
+      "title": "Errors — 5xx 에러율 (%)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(http_requests_total{service=~\"$service\",status_code=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{service=~\"$service\"}[5m])), 0.001)",
+          "legendFormat": "5xx error rate"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 3,
+      "title": "Duration — p50 / p95 / p99 응답 시간",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{service=~\"$service\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=~\"$service\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service=~\"$service\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 4,
+      "title": "Prometheus Scrape Target Availability (/metrics 응답 여부)",
+      "description": "주의: 이 패널은 /metrics 엔드포인트의 scrape 성공 여부만 보여줍니다. 프로세스가 살아있고 /metrics 가 200 이면 1 이 됩니다 — DB 단절로 비즈니스 요청이 503 이어도 1 로 남을 수 있습니다. 진짜 의존성 상태는 아래 'Service Dependency Readiness' 패널을 보세요.",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "up{job=~\"order-service|payment-service|auth-service|gateway-service\"}",
+          "legendFormat": "{{job}} ({{instance}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Service Dependency Readiness (DB / 외부 의존성 진짜 상태)",
+      "description": "각 서비스의 외부 의존성(MongoDB 등) 연결 상태. Prometheus up 과 달리 실제 의존성 가용성을 반영합니다. 0 = 단절, 1 = 정상.",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "service_dependency_ready",
+          "legendFormat": "{{job}} -> {{dependency}} ({{instance}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "READY", "color": "green" } } }
+          ]
+        }
+      }
+    }
+  ]
+}

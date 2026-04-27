@@ -7,7 +7,12 @@
  *   - updateStatus()는 {_id, status: 'PENDING'} 조건으로 원자적 업데이트를 수행합니다
  *     → PENDING인 주문만 업데이트, 이미 종결된 경우 null 반환
  */
-const OrderModel = require('../../models/Order');
+// [Phase 1 통합 검증 중 발견한 회귀]
+//   models/ 는 패키지 루트에 위치 (services/order-service/models/Order.js).
+//   현재 파일은 src/infrastructure/persistence/ 에 있으므로 3단계 위로 올라가야 한다.
+//   기존 ../../models/Order 는 src/models/Order 를 가리켜 MODULE_NOT_FOUND 로 죽었다.
+//   (이 모듈은 jest 테스트에서 mock 으로 대체되어 검출되지 못했다 — 실제 부팅 시에만 노출)
+const OrderModel = require('../../../models/Order');
 
 class MongoOrderRepository {
     /**

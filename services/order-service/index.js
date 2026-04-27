@@ -24,6 +24,9 @@ const MongoOrderRepository = require('./src/infrastructure/persistence/MongoOrde
 const { OrderService } = require('./src/application/OrderService');
 const { createOrderRouter } = require('./src/interfaces/routes/orderRoutes');
 
+// [제24강] Prometheus 메트릭 — RED (Rate, Errors, Duration) 자동 수집
+const { createMetrics } = require('./src/infrastructure/metrics');
+
 const PORT = 8081;
 
 const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/order_db';
@@ -58,7 +61,25 @@ const orderRouter = createOrderRouter({ orderService, internalApiKey: INTERNAL_A
 const app = express();
 app.use(express.json());
 
+// [제24강] 메트릭 미들웨어 — 모든 라우터보다 먼저 등록해야 res.on('finish'/'close') 가 항상 잡힌다.
+// metricsPath 의 self-scrape 는 미들웨어 내부에서 자동 제외되므로 카디널리티 안전.
+const metrics = createMetrics({ serviceName: 'order-service', metricsPath: '/api/order/metrics' });
+app.use(metrics.middleware);
+
+// /api/order/metrics 는 라우터(/api/order)보다 먼저 등록한다.
+// 그렇지 않으면 라우터의 와일드카드(/api/order/:id 등)가 'metrics' 를 잡아갈 수 있다.
+app.get('/api/order/metrics', metrics.handler);
+
 app.use('/api/order', orderRouter);
+
+// [Codex finding #2 반영] MongoDB 연결 상태를 service_dependency_ready{dependency="mongodb"} 로 노출.
+// Prometheus `up` 메트릭은 /metrics scrape 성공 여부만 본다 — Mongo 가 끊겨도 up=1 이므로
+// 별도 신호가 있어야 운영 대시보드가 진짜 health 를 보여줄 수 있다.
+mongoose.connection.on('connected',    () => metrics.dependencies.setReady('mongodb', true));
+mongoose.connection.on('disconnected', () => metrics.dependencies.setReady('mongodb', false));
+mongoose.connection.on('error',        () => metrics.dependencies.setReady('mongodb', false));
+// 초기값을 false 로 명시 — 시계열이 적어도 한 번은 export 되어야 Grafana 가 패널을 표시한다.
+metrics.dependencies.setReady('mongodb', false);
 
 // -----------------------------------------------------------
 // DB 연결 + 서버 시작

@@ -1,0 +1,22 @@
+# ============================================================
+# [제24강] Grafana datasource 자동 provisioning
+# ============================================================
+# 이 파일을 /etc/grafana/provisioning/datasources/ 에 마운트하면
+# Grafana 가 부팅 시 자동으로 Prometheus 를 데이터 소스로 등록한다.
+# (UI 에서 수동 설정할 필요 없음)
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Docker Compose 내부 네트워크에서 prometheus 컨테이너 호스트명으로 접근
+    url: http://prometheus:9090
+    # 첫 데이터 소스로 자동 지정 → 모든 신규 패널의 기본 소스
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST

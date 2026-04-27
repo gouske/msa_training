@@ -1,0 +1,56 @@
+# ============================================================
+# [제24강] Prometheus 메트릭 수집 설정
+# ============================================================
+# Prometheus 는 각 서비스의 /metrics 엔드포인트를 주기적으로 호출(pull)하여
+# 시계열 메트릭을 시계열 DB(자체 TSDB) 에 저장한다.
+#
+# 데이터 흐름:
+#   각 서비스 /metrics  →  Prometheus scrape (15s)  →  Grafana 시각화
+#
+# Phase 1 (이번 PR): order-service 만 활성화.
+# Phase 2 (다음 PR): payment-service / auth-service / gateway-service 활성화.
+# ============================================================
+
+global:
+  # 모든 job 의 기본 수집 주기 (각 job 에서 override 가능)
+  scrape_interval: 15s
+  # 알림 규칙 평가 주기 (Phase 2 이후 alerting 추가 시 사용)
+  evaluation_interval: 15s
+  # 모든 시계열에 자동 부여될 외부 라벨 — 다중 클러스터 환경에서 구분용
+  external_labels:
+    cluster: msa-training-local
+    environment: docker-compose
+
+scrape_configs:
+  # --- Prometheus 자기 자신 ---
+  # 자기 메트릭(prometheus_*) 도 수집해서 scrape duration / target up 상태를 모니터링
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # --- Order Service (Node.js / prom-client) ---
+  # /api/order/metrics 엔드포인트는 self-scrape 가 카운터에 잡히지 않도록 코드 단에서 제외 처리됨.
+  - job_name: order-service
+    metrics_path: /api/order/metrics
+    static_configs:
+      - targets:
+          - order-service-1:8081
+          - order-service-2:8081
+        labels:
+          service: order-service
+
+  # --- Phase 2 추가 예정 ---
+  # - job_name: payment-service
+  #   metrics_path: /api/payment/metrics
+  #   static_configs:
+  #     - targets: ['payment-service:8082']
+  #
+  # - job_name: auth-service
+  #   metrics_path: /actuator/prometheus      # Spring Boot Actuator 표준 경로
+  #   static_configs:
+  #     - targets: ['auth-service:8080']
+  #
+  # - job_name: gateway-service
+  #   metrics_path: /metrics                  # prometheus-net.AspNetCore 표준 경로
+  #   static_configs:
+  #     - targets: ['gateway-service:9000']
