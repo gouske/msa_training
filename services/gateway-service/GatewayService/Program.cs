@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+// [제24강 Phase 2] prometheus-net.AspNetCore — UseHttpMetrics, MapMetrics 확장 메서드
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -281,6 +283,15 @@ app.MapGet("/health/ready", (GatewayService.Discovery.ReadinessChecker checker) 
         new { status = "not_ready", missingClusters = result.MissingClusters },
         statusCode: StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
+
+// [제24강 Phase 2] Prometheus 메트릭 — prometheus-net.AspNetCore
+//   UseHttpMetrics: 모든 HTTP 요청의 method/code/endpoint/duration 자동 수집.
+//     라이브러리가 ASP.NET Core 의 라우트 매칭 결과를 endpoint 라벨로 사용하므로
+//     Phase 1 의 "raw URL 노출 차단" 약속과 호환된다.
+//   MapMetrics: GET /metrics 노출. 자기 자신은 endpoint 라벨이 채워지지 않아 카디널리티 안전.
+//   YARP MapReverseProxy 보다 먼저 등록해야 YARP catch-all 이 /metrics 를 잡지 않는다.
+app.UseHttpMetrics();
+app.MapMetrics().AllowAnonymous();
 
 // 6단계: YARP 게이트웨이 활성화 (기존 코드)
 app.MapReverseProxy();
