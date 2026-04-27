@@ -39,18 +39,32 @@ scrape_configs:
         labels:
           service: order-service
 
-  # --- Phase 2 추가 예정 ---
-  # - job_name: payment-service
-  #   metrics_path: /api/payment/metrics
-  #   static_configs:
-  #     - targets: ['payment-service:8082']
-  #
-  # - job_name: auth-service
-  #   metrics_path: /actuator/prometheus      # Spring Boot Actuator 표준 경로
-  #   static_configs:
-  #     - targets: ['auth-service:8080']
-  #
-  # - job_name: gateway-service
-  #   metrics_path: /metrics                  # prometheus-net.AspNetCore 표준 경로
-  #   static_configs:
-  #     - targets: ['gateway-service:9000']
+  # --- Payment Service (Python FastAPI / prometheus_client + 자체 미들웨어) ---
+  # Phase 1 (Order) 와 동일한 라벨 의미: route 정규화, /metrics self-scrape 제외, dependency gauge.
+  # 컨테이너 이름은 docker-compose 의 'payment-service' 인데 docker-compose 가 자동으로
+  # msa_training-payment-service-1 같은 prefix 를 붙이므로 Compose 내부 DNS 는 'payment-service' 로 해석된다.
+  - job_name: payment-service
+    metrics_path: /api/payment/metrics
+    static_configs:
+      - targets: ['payment-service:8082']
+        labels:
+          service: payment-service
+
+  # --- Auth Service (Kotlin Spring Boot / Actuator + Micrometer) ---
+  # Spring Boot Actuator 가 /actuator/prometheus 표준 경로로 메트릭을 자동 노출.
+  # Micrometer 가 application.yml 의 management.metrics.tags 설정으로 service 라벨을 자동 부여.
+  - job_name: auth-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['auth-service:8080']
+        labels:
+          service: auth-service
+
+  # --- Gateway Service (.NET 8 YARP / prometheus-net.AspNetCore) ---
+  # 라이브러리 표준인 /metrics 경로 — gateway 의 ReverseProxy 보다 먼저 등록되어 catch-all 에 잡히지 않음.
+  - job_name: gateway-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['gateway-service:9000']
+        labels:
+          service: gateway-service
