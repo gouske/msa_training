@@ -21,7 +21,12 @@ class SecurityConfig {
         // GET만 허용할 경로
         private val AUTH_GET_WHITELIST = arrayOf(
             "/api/auth/validate",
-            "/api/auth/health"
+            "/api/auth/health",
+            // [제24강 Phase 2] Actuator 메트릭 / 헬스 — Prometheus scrape 가 인증 없이 호출.
+            // 운영 환경에서는 별도 망분리 / 인증 게이트로 보호하지만, 학습 환경은 화이트리스트로 충분.
+            "/actuator/prometheus",
+            "/actuator/health",
+            "/actuator/health/**"
         )
     }
 

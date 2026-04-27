@@ -37,6 +37,25 @@ consul:
   health-path: /api/auth/health
   service-address: ${CONSUL_SERVICE_ADDRESS:#{null}}
 
+# [제24강 Phase 2] Actuator / Micrometer 메트릭 노출
+# - /actuator/prometheus : Prometheus exposition 형식 메트릭
+# - /actuator/health      : DB / 디스크 등 컴포넌트 헬스 상태
+# 그 외 sensitive 한 endpoint(env, beans, mappings 등)는 노출하지 않는다.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  metrics:
+    tags:
+      # 모든 메트릭에 service 라벨을 자동 부여 → Grafana 에서 4 서비스 일관 검색.
+      service: auth-service
+
 logging:
   level:
     org.hibernate.SQL: debug
