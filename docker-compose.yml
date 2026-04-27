@@ -353,6 +353,13 @@ services:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   # [시계열 DB] Prometheus: 각 서비스의 /metrics 를 주기적으로 호출하여 시계열로 저장
+  #
+  # [Codex finding #1 반영] 보안 기본값:
+  #   - 포트 바인딩을 127.0.0.1 로 한정 — 호스트의 모든 NIC 에 노출되지 않게 함.
+  #     공유 dev 서버 / 원격 VM / CI 러너에서 외부 노출되는 사고를 방지.
+  #     원격에서 접근하려면 명시적으로 SSH 터널/프록시를 거치게 한다.
+  #   - --web.enable-lifecycle 제거 — config reload 를 HTTP POST 로 트리거하는 권한.
+  #     학습 환경에서는 컨테이너 재시작으로 충분하므로 굳이 활성화하지 않는다.
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: prometheus
@@ -362,22 +369,26 @@ services:
       # 시계열 데이터 영속화 (down 후 재기동해도 메트릭 유지)
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"   # 웹 UI: http://localhost:9090
+      - "127.0.0.1:9090:9090"   # 웹 UI: http://localhost:9090 (호스트 로컬에서만 접근)
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=7d'   # 학습용으로 7일 보존 (디스크 절약)
-      - '--web.enable-lifecycle'              # 설정 reload 를 HTTP POST 로 가능하게
     restart: unless-stopped
 
   # [시각화] Grafana: Prometheus 데이터로 대시보드 + 알림
+  #
+  # [Codex finding #1 반영]:
+  #   - 관리자 자격을 .env 환경변수로 주입 (기본값 admin/admin 은 학습 시작 편의용).
+  #     운영/공유 환경에서는 반드시 .env 의 GRAFANA_ADMIN_PASSWORD 를 강력한 값으로 교체.
+  #   - 포트 바인딩 127.0.0.1 — Prometheus 와 동일한 이유.
   grafana:
     image: grafana/grafana:11.5.2
     container_name: grafana
     environment:
-      # 학습용 기본 관리자 계정 — 운영에서는 반드시 환경변수/시크릿으로 교체
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # .env 의 GRAFANA_ADMIN_USER / GRAFANA_ADMIN_PASSWORD 가 우선, 없으면 admin/admin 폴백
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       # 첫 로그인 시 비밀번호 변경 강제 비활성 (학습 편의)
       - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
     volumes:
@@ -389,7 +400,7 @@ services:
       # Grafana 자체 데이터 (대시보드 편집 결과 등) 영속화
       - grafana-data:/var/lib/grafana
     ports:
-      - "3000:3000"   # 웹 UI: http://localhost:3000 (admin / admin)
+      - "127.0.0.1:3000:3000"   # 웹 UI: http://localhost:3000 (호스트 로컬에서만 접근)
     depends_on:
       - prometheus
     restart: unless-stopped
