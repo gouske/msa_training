@@ -1,5 +1,7 @@
 {
   "sdk": {
-    "version": "8.0.401"
+    "version": "8.0.0",
+    "_comment_rollForward": "[제24강 Phase 2] .NET 8 메이저는 고정. minor band(featureband+patch) 는 latestMinor 로 가장 높은 가용 버전을 사용. CI 는 actions/setup-dotnet 이 명시 8.0.401 을 설치, 로컬은 Homebrew 8.0.125 또는 그 이상도 통과.",
+    "rollForward": "latestMinor"
   }
 }

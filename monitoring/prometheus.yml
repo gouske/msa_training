@@ -39,18 +39,35 @@ scrape_configs:
         labels:
           service: order-service
 
-  # --- Phase 2 추가 예정 ---
-  # - job_name: payment-service
-  #   metrics_path: /api/payment/metrics
-  #   static_configs:
-  #     - targets: ['payment-service:8082']
-  #
-  # - job_name: auth-service
-  #   metrics_path: /actuator/prometheus      # Spring Boot Actuator 표준 경로
-  #   static_configs:
-  #     - targets: ['auth-service:8080']
-  #
-  # - job_name: gateway-service
-  #   metrics_path: /metrics                  # prometheus-net.AspNetCore 표준 경로
-  #   static_configs:
-  #     - targets: ['gateway-service:9000']
+  # --- Payment Service (Python FastAPI / prometheus_client + 자체 미들웨어) ---
+  # Phase 1 (Order) 와 동일한 라벨 의미: route 정규화, /metrics self-scrape 제외, dependency gauge.
+  # 컨테이너 이름은 docker-compose 의 'payment-service' 인데 docker-compose 가 자동으로
+  # msa_training-payment-service-1 같은 prefix 를 붙이므로 Compose 내부 DNS 는 'payment-service' 로 해석된다.
+  - job_name: payment-service
+    metrics_path: /api/payment/metrics
+    static_configs:
+      - targets: ['payment-service:8082']
+        labels:
+          service: payment-service
+
+  # --- Auth Service (Kotlin Spring Boot / Actuator + Micrometer) ---
+  # [Codex Phase 2 review #2 반영] Actuator 는 별도 management 포트(9081) 에서만 노출.
+  # 비즈니스 포트(8080) 의 /actuator/** 는 SecurityConfig 화이트리스트에서 제거되어 외부 라우팅 경로 차단.
+  # Prometheus 컨테이너는 docker network 내부에서 9081 로 직접 도달.
+  - job_name: auth-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['auth-service:9081']
+        labels:
+          service: auth-service
+
+  # --- Gateway Service (.NET 8 YARP / prometheus-net.AspNetCore) ---
+  # [Codex Phase 2 review #1 반영] /metrics 는 별도 management 리스너(9091) 에서만 노출.
+  # 공개 ingress(9000) 에서는 RequireHost 로 매핑되지 않아 외부 정찰을 차단한다.
+  # docker-compose 에서 9091 호스트 포트는 노출하지 않음 → Prometheus 컨테이너만 도달 가능.
+  - job_name: gateway-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['gateway-service:9091']
+        labels:
+          service: gateway-service

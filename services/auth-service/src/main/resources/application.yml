@@ -37,6 +37,34 @@ consul:
   health-path: /api/auth/health
   service-address: ${CONSUL_SERVICE_ADDRESS:#{null}}
 
+# [제24강 Phase 2 + Codex review #2 반영] Actuator / Micrometer 메트릭 노출
+#
+# 보안 격리:
+#   - server.port (8080) : 비즈니스 API (Gateway 가 라우팅)
+#   - management.server.port (9081) : Actuator 전용 — docker-compose 에서 호스트 포트 노출 X.
+#     Prometheus 컨테이너만 내부 네트워크로 도달 가능. 외부 사용자가 Gateway 의 /auth/* 익명 라우트
+#     를 통해 actuator 에 접근하는 경로가 차단된다.
+#   - Gateway 도 /auth/actuator/** 를 명시적 거부 미들웨어로 추가 차단 (defense in depth).
+#
+# 노출 endpoint 는 health, prometheus 만 — env / beans / mappings 등 sensitive 는 비공개.
+management:
+  server:
+    port: 9081
+    address: 0.0.0.0
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  metrics:
+    tags:
+      # 모든 메트릭에 service 라벨을 자동 부여 → Grafana 에서 4 서비스 일관 검색.
+      service: auth-service
+
 logging:
   level:
     org.hibernate.SQL: debug

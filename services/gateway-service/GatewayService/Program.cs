@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+// [제24강 Phase 2] prometheus-net.AspNetCore — UseHttpMetrics, MapMetrics 확장 메서드
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -177,6 +179,12 @@ var correlationIdPattern = new Regex(@"^[A-Za-z0-9_-]{1,64}$", RegexOptions.Comp
 var correlationIdLogger = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("CorrelationId");
 
+// [Codex Phase 2 review #3 반영] UseHttpMetrics 를 인증/권한/차단 미들웨어 보다 앞에 둔다.
+// 이전 위치(파이프라인 끝부분)에서는 401/403 으로 끊기는 요청이 메트릭에 도달하지 못해
+// 토큰 만료 폭증 / 공격 트래픽이 그래프에서 사라지는 사각지대가 있었다.
+// Correlation ID 미들웨어 직후, UseAuthentication 직전 위치 = 모든 요청이 무조건 거치는 자리.
+app.UseHttpMetrics();
+
 app.Use(async (context, next) =>
 {
     // 1) 클라이언트가 헤더를 보냈으면 검증, 통과 시 재사용 / 실패 시 새 UUID 생성
@@ -227,9 +235,23 @@ app.UseAuthorization();
 // 문제: /order/{**remainder} 와일드카드가 /order/order/callback도 프록시하여
 //       외부 사용자가 내부 콜백 API에 도달할 수 있었습니다.
 // 해결: 요청 경로에 "/order/callback"이 포함되면 즉시 403을 반환합니다.
+//
+// [Codex Phase 2 review #2 반영 — defense in depth]
+//   /auth/actuator/** 도 차단한다. Auth 의 actuator 가 별도 management 포트(9081) 로
+//   분리되어 비즈니스 포트(8080) 에는 더 이상 노출되지 않지만, Gateway 의 auth-route 가
+//   Anonymous 정책이라 외부 사용자가 라우팅 패턴 자체를 시도하지 못하도록 1차 방어선으로 차단.
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.Value?.Contains("/order/callback", StringComparison.OrdinalIgnoreCase) == true)
+    var path = context.Request.Path.Value;
+    if (path is null)
+    {
+        await next();
+        return;
+    }
+    var isInternal =
+        path.Contains("/order/callback", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/auth/actuator", StringComparison.OrdinalIgnoreCase);
+    if (isInternal)
     {
         context.Response.StatusCode = 403;
         context.Response.ContentType = "application/json";
@@ -281,6 +303,22 @@ app.MapGet("/health/ready", (GatewayService.Discovery.ReadinessChecker checker) 
         new { status = "not_ready", missingClusters = result.MissingClusters },
         statusCode: StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
+
+// [Codex Phase 2 review #1 반영] /metrics 는 별도 management 리스너(:9091) 에만 매핑한다.
+// docker-compose 에서 호스트 9091 포트는 노출하지 않음 → Prometheus 컨테이너만 내부 네트워크로 도달.
+// 외부 ingress(:9000) 에서는 /metrics 가 404 가 되어 트래픽 패턴 정찰을 차단한다.
+//   - UseHttpMetrics 자체는 모든 리스너의 요청을 측정 (위치는 인증/권한 보다 앞 — 401/403 도 캡처)
+//   - MapMetrics 는 RequireHost 로 management 리스너에서만 노출
+//
+// 테스트 환경(WebApplicationFactory + TestServer)은 Kestrel listener 분리가 무의미하므로
+// Configuration "Metrics:ManagementHost" 를 빈 값으로 override 하면 RequireHost 를 적용하지 않아
+// 단일 TestServer 에서 모든 host 로 /metrics 에 도달할 수 있다.
+var metricsHost = builder.Configuration["Metrics:ManagementHost"];
+var metricsBuilder = app.MapMetrics().AllowAnonymous();
+if (!string.IsNullOrWhiteSpace(metricsHost))
+{
+    metricsBuilder.RequireHost(metricsHost);
+}
 
 // 6단계: YARP 게이트웨이 활성화 (기존 코드)
 app.MapReverseProxy();

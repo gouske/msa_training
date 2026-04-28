@@ -12,6 +12,11 @@
     <!-- [제19강 추가] ASP.NET Core JWT Bearer 인증 미들웨어
          이 패키지가 Authorization: Bearer {토큰} 헤더를 자동으로 파싱하고 검증합니다. -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.13" />
+    <!-- [제24강 Phase 2] prometheus-net.AspNetCore
+         http_request_duration_seconds, http_requests_in_progress 등 RED 메트릭을
+         자동 수집하고 /metrics 엔드포인트로 노출한다.
+         Phase 1 (Order Node prom-client) 와 라벨 의미가 호환된다. -->
+    <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
   </ItemGroup>
 
   <!-- [제19강 추가] 테스트 프로젝트(GatewayService.Tests)에서

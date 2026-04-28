@@ -18,7 +18,11 @@ class SecurityConfig {
             "/api/auth/signup"
         )
 
-        // GET만 허용할 경로
+        // GET만 허용할 경로 — 비즈니스 API 포트(8080) 전용.
+        //
+        // [Codex review #2 반영] /actuator/** 는 별도 management 포트(9081) 로 분리되어
+        // 이 SecurityFilterChain 에 닿지 않는다. 따라서 비즈니스 포트의 화이트리스트에서 제외 →
+        // Gateway 의 /auth/* 익명 라우트를 통한 actuator 노출 경로 자체가 사라진다.
         private val AUTH_GET_WHITELIST = arrayOf(
             "/api/auth/validate",
             "/api/auth/health"

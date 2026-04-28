@@ -33,6 +33,13 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-security")
 
+    // [제24강 Phase 2] Spring Boot Actuator + Micrometer Prometheus 레지스트리
+    //   Actuator 가 /actuator/prometheus 엔드포인트를 자동 노출.
+    //   Micrometer 가 Spring MVC 요청, JVM, HikariCP 등의 메트릭을 자동 수집한다.
+    //   별도 미들웨어 작성 없이 4 서비스 중 가장 짧은 경로로 RED 메트릭 + JVM/DB pool 가시성 확보.
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("io.micrometer:micrometer-registry-prometheus")
+
     // [수정] 아래 한 줄을 정확히 확인하세요.// [중요] starter-webmvc 대신 starter-web을 사용하세요. (mvc를 포함한 표준임)
     // implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-web")
