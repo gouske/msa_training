@@ -6,11 +6,15 @@ services:
   gateway-service:
     build: ./services/gateway-service/GatewayService
     ports:
+      # 공개 ingress 만 호스트 노출. management 포트(9091) 는 docker network 내부에서만 노출.
+      # → Prometheus 컨테이너만 /metrics 도달, 외부 정찰 불가 (Codex Phase 2 review #1).
       - "9000:9000"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      # [핵심] 모든 IP(외부 포함)에서 9000번 포트로 들어오는 접속을 허용합니다.
-      ASPNETCORE_URLS: http://+:9000
+      # [핵심] Kestrel multi-listener — 9000(public ingress) + 9091(management /metrics 전용).
+      # appsettings.json 의 Kestrel:Endpoints 가 컨테이너 내부에서 binding 을 정의한다.
+      # ASPNETCORE_URLS 는 명시하지 않아 appsettings 의 Kestrel 설정을 그대로 쓰게 한다.
+      # (이전: ASPNETCORE_URLS=http://+:9000 → 단일 listener 로 강제. 제거 필요.)
       # [제19강 추가] Gateway가 JWT 토큰을 검증할 때 사용하는 비밀 키
       # Auth Service의 jwt.secret(application.yml)과 동일한 값이어야 합니다.
       # __는 .NET의 계층 구분자입니다: Jwt__SecretKey → appsettings.json의 Jwt.SecretKey를 오버라이드

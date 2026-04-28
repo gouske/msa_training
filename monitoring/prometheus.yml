@@ -51,20 +51,23 @@ scrape_configs:
           service: payment-service
 
   # --- Auth Service (Kotlin Spring Boot / Actuator + Micrometer) ---
-  # Spring Boot Actuator 가 /actuator/prometheus 표준 경로로 메트릭을 자동 노출.
-  # Micrometer 가 application.yml 의 management.metrics.tags 설정으로 service 라벨을 자동 부여.
+  # [Codex Phase 2 review #2 반영] Actuator 는 별도 management 포트(9081) 에서만 노출.
+  # 비즈니스 포트(8080) 의 /actuator/** 는 SecurityConfig 화이트리스트에서 제거되어 외부 라우팅 경로 차단.
+  # Prometheus 컨테이너는 docker network 내부에서 9081 로 직접 도달.
   - job_name: auth-service
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ['auth-service:8080']
+      - targets: ['auth-service:9081']
         labels:
           service: auth-service
 
   # --- Gateway Service (.NET 8 YARP / prometheus-net.AspNetCore) ---
-  # 라이브러리 표준인 /metrics 경로 — gateway 의 ReverseProxy 보다 먼저 등록되어 catch-all 에 잡히지 않음.
+  # [Codex Phase 2 review #1 반영] /metrics 는 별도 management 리스너(9091) 에서만 노출.
+  # 공개 ingress(9000) 에서는 RequireHost 로 매핑되지 않아 외부 정찰을 차단한다.
+  # docker-compose 에서 9091 호스트 포트는 노출하지 않음 → Prometheus 컨테이너만 도달 가능.
   - job_name: gateway-service
     metrics_path: /metrics
     static_configs:
-      - targets: ['gateway-service:9000']
+      - targets: ['gateway-service:9091']
         labels:
           service: gateway-service
