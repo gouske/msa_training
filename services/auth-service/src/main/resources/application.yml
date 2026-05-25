@@ -36,6 +36,11 @@ consul:
   # order-service 의 /api/order/health, payment-service 의 /api/payment/health 와 패턴 일관성 유지.
   health-path: /api/auth/health
   service-address: ${CONSUL_SERVICE_ADDRESS:#{null}}
+  # [K8s + Consul 회고] Pod 단위 유니크 식별자 — replica 간 ID 충돌 차단용.
+  # K8s 환경에서는 deployment.yml 의 Downward API 가 POD_IP·POD_NAME 을 주입한다.
+  # Docker Compose / 로컬 실행에서는 둘 다 null 이므로 기존 fallback 체인(service-address → hostName) 이 동작.
+  pod-ip: ${POD_IP:#{null}}
+  pod-name: ${POD_NAME:#{null}}
 
 # [제24강 Phase 2 + Codex review #2 반영] Actuator / Micrometer 메트릭 노출
 #

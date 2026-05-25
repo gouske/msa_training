@@ -19,15 +19,23 @@ async def register(
     host: str,
     port: int,
     health_path: str,
+    instance_key: str | None = None,
 ) -> str:
     """
     Consul에 자기를 등록한다. 5회 재시도 후 실패해도 예외 던지지 않음
     (서비스 부팅 자체는 성공해야 한다는 원칙 — Consul이 SPOF가 되면 안 됨).
 
+    Args:
+        instance_key: [K8s + Consul 회고] serviceId 의 인스턴스 식별자.
+            K8s 환경에서는 POD_NAME 을 넘겨 replica 간 ID 충돌을 차단한다.
+            생략하면 host 가 그대로 사용된다 (Docker Compose 기존 동작 호환).
+
     Returns:
         service_id (예: "payment-service-payment-service-8082")
     """
-    service_id = f"{name}-{host}-{port}"
+    # serviceId 인스턴스 키: instance_key > host. K8s 환경에서는 instance_key = POD_NAME.
+    # 이전: 모든 replica 가 같은 host(K8s Service DNS) 로 등록되어 serviceId 가 충돌했음.
+    service_id = f"{name}-{instance_key or host}-{port}"
     payload = {
         "ID": service_id,
         "Name": name,

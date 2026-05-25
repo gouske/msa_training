@@ -52,13 +52,24 @@ spec:
                 secretKeyRef:
                   name: msa-secrets
                   key: INTERNAL_API_KEY
-            # [제22강] Consul 등록용 — Gateway 가 폴링으로 order 인스턴스를 찾는다
+            # [제22강 + 회고] Consul 등록용 — Gateway 가 폴링으로 order 인스턴스를 찾는다.
+            # replica 단위 유일 등록을 위해 Downward API 로 POD_IP·POD_NAME 을 주입한다.
+            # 기존 CONSUL_SERVICE_ADDRESS="order-service" 는 모든 Pod 가 K8s Service DNS 로
+            # 동일 ID 등록되어 충돌했음 — POD_IP/POD_NAME 로 대체.
             - name: CONSUL_HOST
               value: "consul"
             - name: CONSUL_PORT
               value: "8500"
-            - name: CONSUL_SERVICE_ADDRESS
-              value: "order-service"
+            # Pod 의 실제 IP — Consul Address 로 사용해 인스턴스 단위 헬스 체크가 가능해진다.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Pod 의 실제 이름 — Consul serviceId 의 유니크 키로 사용한다.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
 
           # resources: CPU/메모리 제한
           # requests: 스케줄링 시 보장되는 최소 리소스
