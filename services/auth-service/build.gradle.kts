@@ -66,6 +66,17 @@ dependencies {
     // 버전은 Spring Boot 3.3.5 BOM 이 관리하므로 명시하지 않는다.
     testRuntimeOnly("com.h2database:h2")
 
+    // [PR #30 Codex 적대적 리뷰 follow-up — Q1/A]
+    // 운영과 동일한 PostgreSQL 15 엔진으로 prod-like contextLoads 를 검증하기 위한
+    // Testcontainers. Docker 데몬이 필요하며, AuthProdLikeContextTest 는
+    // @EnabledIfEnvironmentVariable("RUN_PROD_LIKE_TESTS", "true") 로 명시 opt-in
+    // 일 때만 실행된다 (가벼운 H2 테스트는 항상 통과).
+    //
+    // Spring Boot 3.3.5 BOM 이 가져오는 1.19.8 은 macOS Docker Desktop 4.x 의 새
+    // socket 경로 자동 감지에 일부 실패하는 사례가 있어, 최신 1.21.3 명시.
+    testImplementation("org.testcontainers:postgresql:1.21.3")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.3")
+
     // Mockito: 가짜(Mock) 객체를 만들어 단위 테스트에서 외부 의존성을 격리합니다.
     testImplementation("org.mockito:mockito-core:5.14.2")
     testImplementation("org.mockito:mockito-junit-jupiter:5.14.2")

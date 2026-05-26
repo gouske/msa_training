@@ -62,16 +62,30 @@ jobs:
         uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
 
       # Gradle 테스트 실행
-      # 환경 변수로 테스트용 PostgreSQL 연결 정보 주입
+      #
+      # [PR #30 P1 #1 이후 변경] 외부 PostgreSQL 의존성 제거.
+      # 과거에는 SPRING_DATASOURCE_URL 등 env 로 services PG(5432)를 강제 주입했지만,
+      # 이제 다음 두 테스트가 자체적으로 DB 를 격리한다:
+      #   - AuthServiceApplicationTests: @ActiveProfiles("test") → application-test.yml
+      #     의 H2 in-memory 사용 (DB 미가동 환경에서도 통과)
+      #   - AuthProdLikeContextTest: Testcontainers PostgreSQL 15 컨테이너 자체 기동
+      # 따라서 workflow 의 SPRING_DATASOURCE_* env 주입이 오히려 H2 driver / PG URL
+      # mismatch 를 일으켜 컨텍스트 로딩이 실패했다 (DriverDataSource:109). 제거.
+      #
+      # services PG 블록은 유지 — 향후 다른 통합 테스트가 외부 DB 를 요구할 수 있음.
       - name: 테스트 실행
         run: ./gradlew test
         working-directory: services/auth-service
         env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/auth_test_db
-          SPRING_DATASOURCE_USERNAME: testuser
-          SPRING_DATASOURCE_PASSWORD: testpass
           # JWT 비밀 키는 테스트 전용 더미값 사용 (실제 키 아님)
           JWT_SECRET_KEY: test-secret-key-for-ci-only-must-be-32chars
+          # [PR #31 / Codex 적대적 리뷰 high finding 대응]
+          # AuthProdLikeContextTest 가 @EnabledIfEnvironmentVariable 로 opt-in 처리되어
+          # 있어 이 변수가 없으면 CI 에서도 자동 skip 된다. CI runner 는 Docker 가 항상
+          # 가동되어 있어 Testcontainers PostgreSQL 컨테이너 기동이 가능하므로,
+          # 여기서 명시적으로 true 로 활성화하여 PR/merge 게이트에서 실제 prod-like
+          # 검증이 수행되도록 한다.
+          RUN_PROD_LIKE_TESTS: true
 
   # ─────────────────────────────────────────
   # Job 2: Docker 이미지 빌드 & 푸시 (CD)
