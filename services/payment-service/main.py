@@ -207,21 +207,31 @@ async def lifespan(app: FastAPI):
     consumer_thread.start()
     print("🚀 RabbitMQ Consumer 스레드 시작됨")
 
-    # [실전 #6] Consul 자기 등록
-    # 주소 결정 우선순위: CONSUL_SERVICE_ADDRESS → HOSTNAME → socket.gethostname() fallback
-    # Docker 환경에서 컨테이너 ID 대신 서비스 이름을 쓰려면 CONSUL_SERVICE_ADDRESS 주입 필요
+    # [실전 #6 + K8s 회고] Consul 자기 등록.
+    #
+    # 주소 우선순위:
+    #   1. POD_IP                          (K8s Downward API — Pod 별 유니크 IP)
+    #   2. CONSUL_SERVICE_ADDRESS          (Docker Compose 의 hostname)
+    #   3. HOSTNAME / socket.gethostname() (컨테이너/로컬 호스트네임 fallback)
+    #
+    # 인스턴스 키 우선순위 (serviceId 충돌 차단):
+    #   1. POD_NAME (K8s — replica 마다 유니크)
+    #   2. host     (Docker Compose 호환)
     consul_url = f"http://{os.getenv('CONSUL_HOST', 'localhost')}:{os.getenv('CONSUL_PORT', '8500')}"
     host = (
-        os.getenv("CONSUL_SERVICE_ADDRESS")
+        os.getenv("POD_IP")
+        or os.getenv("CONSUL_SERVICE_ADDRESS")
         or os.getenv("HOSTNAME")
         or socket.gethostname()
     )
+    instance_key = os.getenv("POD_NAME") or host
     sid = await register(
         consul_url=consul_url,
         name="payment-service",
         host=host,
         port=8082,
         health_path="/api/payment/health",
+        instance_key=instance_key,
     )
     app.state.consul_service_id = sid
     app.state.consul_url = consul_url

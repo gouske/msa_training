@@ -105,15 +105,30 @@ function startHttpServer() {
     app.listen(PORT, () => {
         console.log(`🚀 주문 서비스가 http://localhost:${PORT} 에서 시작되었습니다.`);
 
-        // [실전 #6] Consul 자기 등록
+        // [실전 #6 + K8s 회고] Consul 자기 등록.
+        //
+        // 주소 우선순위:
+        //   1. POD_IP                  (K8s Downward API — Pod 별 유니크 IP)
+        //   2. CONSUL_SERVICE_ADDRESS  (Docker Compose 의 hostname)
+        //   3. HOSTNAME                (컨테이너/로컬 호스트네임)
+        //   4. 'order-service'         (최후 fallback)
+        //
+        // 인스턴스 키 우선순위 (serviceId 충돌 차단):
+        //   1. POD_NAME (K8s — replica 마다 유니크)
+        //   2. host     (Docker Compose 호환)
         const consulUrl = `http://${process.env.CONSUL_HOST || 'localhost'}:${process.env.CONSUL_PORT || 8500}`;
-        const myHost = process.env.CONSUL_SERVICE_ADDRESS || process.env.HOSTNAME || 'order-service';
+        const myHost = process.env.POD_IP
+            || process.env.CONSUL_SERVICE_ADDRESS
+            || process.env.HOSTNAME
+            || 'order-service';
+        const myInstanceKey = process.env.POD_NAME || myHost;
         register({
             consulUrl,
             name: 'order-service',
             host: myHost,
             port: PORT,
             healthPath: '/api/order/health',
+            instanceKey: myInstanceKey,
         }).then((serviceId) => {
             setupGracefulShutdown(consulUrl, serviceId);
         }).catch((err) => {

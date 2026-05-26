@@ -35,14 +35,31 @@ class ConsulRegistrar(
     @Value("\${spring.application.name:auth-service}") private val serviceName: String,
     @Value("\${consul.health-path:/api/auth/health}") private val healthPath: String,
     @Value("\${consul.service-address:#{null}}") private val overrideAddress: String? = null,
+    // [K8s + Consul 회고] Downward API 로 주입된 Pod 메타데이터.
+    // K8s 외 환경(Docker Compose / 로컬)에서는 두 값 모두 null → 기존 fallback 체인 그대로 동작.
+    @Value("\${consul.pod-ip:#{null}}") private val podIp: String? = null,
+    @Value("\${consul.pod-name:#{null}}") private val podName: String? = null,
     private val restTemplate: RestTemplate = RestTemplateBuilder().build(),
 ) {
     private val log = LoggerFactory.getLogger(ConsulRegistrar::class.java)
     private val objectMapper = jacksonObjectMapper()
 
-    // 주소 결정: override 우선, 없으면 hostName fallback
-    private val host: String = overrideAddress ?: InetAddress.getLocalHost().hostName
-    private val serviceId: String = "$serviceName-$host-$servicePort"
+    // 주소 결정 우선순위:
+    //   1. POD_IP            (K8s Downward API — Pod 별 유니크 IP. 인스턴스 단위 헬스 체크 도달)
+    //   2. CONSUL_SERVICE_ADDRESS (Docker Compose 등에서 명시한 hostname)
+    //   3. InetAddress.hostName   (로컬 실행 fallback)
+    private val host: String =
+        podIp?.takeIf { it.isNotBlank() }
+            ?: overrideAddress?.takeIf { it.isNotBlank() }
+            ?: InetAddress.getLocalHost().hostName
+
+    // serviceId 의 인스턴스 식별자:
+    //   1. POD_NAME (K8s — replica 마다 유니크. 예: auth-service-deadbeef-x12k9)
+    //   2. host     (Docker Compose hostname / 로컬 hostName)
+    // 기존 "serviceName-host-port" 식은 K8s 환경에서 모든 replica 가 동일 ID 로 등록되어
+    // 한 Pod 의 deregister 가 다른 Pod 까지 사라지게 만드는 결함이 있었다.
+    private val instanceKey: String = podName?.takeIf { it.isNotBlank() } ?: host
+    private val serviceId: String = "$serviceName-$instanceKey-$servicePort"
 
     @PostConstruct
     fun register() {

@@ -12,15 +12,20 @@ const axios = require('axios');
  * Consul에 자기를 등록한다.
  *
  * @param {Object}   opts
- * @param {string}   opts.consulUrl   - Consul base URL (예: "http://consul-server:8500")
- * @param {string}   opts.name        - 서비스 이름 (예: "order-service")
- * @param {string}   opts.host        - 자기 호스트명 (Docker에서는 컨테이너 이름)
- * @param {number}   opts.port        - 자기 포트
- * @param {string}   opts.healthPath  - 헬스체크 경로 (예: "/api/order/health")
+ * @param {string}   opts.consulUrl    - Consul base URL (예: "http://consul-server:8500")
+ * @param {string}   opts.name         - 서비스 이름 (예: "order-service")
+ * @param {string}   opts.host         - Consul 에 등록할 Address (Pod IP / Docker hostname / 로컬 호스트네임)
+ * @param {number}   opts.port         - 자기 포트
+ * @param {string}   opts.healthPath   - 헬스체크 경로 (예: "/api/order/health")
+ * @param {string}  [opts.instanceKey] - [K8s + Consul 회고] serviceId 의 인스턴스 식별자.
+ *                                       K8s 환경에서는 POD_NAME 을 넘겨 replica 간 ID 충돌을 차단한다.
+ *                                       생략하면 host 가 그대로 사용된다 (Docker Compose 기존 동작 호환).
  * @returns {Promise<string>} service-id
  */
-async function register({ consulUrl, name, host, port, healthPath }) {
-    const id = `${name}-${host}-${port}`;
+async function register({ consulUrl, name, host, port, healthPath, instanceKey }) {
+    // serviceId 인스턴스 키: instanceKey > host. K8s 환경에서는 instanceKey = POD_NAME.
+    // 이전: 모든 replica 가 같은 host(K8s Service DNS) 로 등록되어 serviceId 가 충돌했음.
+    const id = `${name}-${instanceKey || host}-${port}`;
     const payload = {
         ID: id,
         Name: name,
