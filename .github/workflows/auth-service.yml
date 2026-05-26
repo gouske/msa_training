@@ -59,7 +59,7 @@ jobs:
 
       # Gradle 캐시 설정 (빌드 속도 향상)
       - name: Gradle 설정
-        uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3
+        uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
 
       # Gradle 테스트 실행
       # 환경 변수로 테스트용 PostgreSQL 연결 정보 주입
