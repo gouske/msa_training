@@ -1,0 +1,69 @@
+# =====================================================================
+# [P1 #1 / @SpringBootTest PostgreSQL 의존 분리]
+#
+# 목적:
+#   - @SpringBootTest 의 contextLoads 가 운영 PostgreSQL(localhost:5432)
+#     에 묶여 있어, DB 가 떠 있지 않은 환경(CI / 처음 받는 사람)에서
+#     컨텍스트 로딩 자체가 실패하던 결함을 해결한다.
+#
+# 동작 원리:
+#   - 테스트 클래스에 @ActiveProfiles("test") 가 붙으면 Spring 이
+#     이 파일을 application.yml 위에 덮어쓰기(merge override) 한다.
+#   - datasource / jpa / consul.enabled / jwt 만 덮어쓴다 — 나머지는
+#     운영 application.yml 의 fallback 값 그대로 사용.
+#
+# 한계:
+#   - H2 PostgreSQL 호환 모드(MODE=PostgreSQL) 가 모든 PG 문법을 지원하지는 않는다.
+#     JSONB, CITEXT, LATERAL JOIN 등 PG-specific 기능을 쓰게 되면
+#     Testcontainers PostgreSQL 로 옮겨야 한다.
+# =====================================================================
+
+spring:
+  datasource:
+    # H2 in-memory DB — JVM 프로세스가 끝나면 자동 폐기.
+    # MODE=PostgreSQL : Hibernate 가 PG 와 유사한 SQL 방언을 사용하도록 힌트.
+    # DB_CLOSE_DELAY=-1 : 마지막 connection 이 닫혀도 DB 가 사라지지 않도록 유지
+    #                     (테스트 실행 중 connection pool 이 재사용되어도 안전).
+    url: jdbc:h2:mem:authdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      # 테스트 시작 시 스키마 생성, 컨텍스트 종료 시 폐기.
+      # 운영의 'update' 와 달리 매 테스트가 완전 클린 상태에서 시작.
+      ddl-auto: create-drop
+    # 테스트 로그를 깔끔하게 유지 — SQL 디버깅이 필요하면 일시적으로 true 로.
+    show-sql: false
+    properties:
+      hibernate:
+        # H2 PG 호환 모드 에서는 H2Dialect 가 가장 안정적.
+        dialect: org.hibernate.dialect.H2Dialect
+
+# JWT 시크릿 — 테스트 전용 더미 값. 운영 시크릿 노출 방지 + 컨텍스트가 뜨기만 하면 됨.
+# 32바이트 이상이어야 HS256 키 길이 제약을 만족.
+jwt:
+  secret: test-only-secret-key-for-spring-boot-test-context-loading-12345
+  issuer: msa-auth-service-test
+  audience: msa-gateway-test
+
+# [P1 #1 / Consul 격리]
+# false → @ConditionalOnProperty 가 ConsulRegistrar 빈을 컨텍스트에 등록하지 않음.
+# 따라서 @PostConstruct register() 가 실행되지 않아 Consul 미가동 환경에서도
+# 컨텍스트 로딩이 즉시 완료된다.
+consul:
+  enabled: false
+
+# 테스트 시 Actuator management 별도 포트를 띄우지 않도록 비활성 — 포트 충돌 방지.
+# (port: -1 은 management 서버 자체를 끈다.)
+management:
+  server:
+    port: -1
+
+# 테스트 로그는 WARN 이상만 — 실행이 깔끔해진다.
+logging:
+  level:
+    org.hibernate.SQL: warn
+    org.hibernate.type.descriptor.sql.BasicBinder: warn
+    org.springframework.orm.jpa: warn

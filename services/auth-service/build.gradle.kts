@@ -60,6 +60,12 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
+    // [P1 #1 / @SpringBootTest PostgreSQL 의존 분리]
+    // 테스트 시 운영용 PostgreSQL 대신 메모리 안에서 동작하는 H2 를 잡도록 한다.
+    // ddl-auto=create-drop 와 결합되어 매 테스트 컨텍스트마다 클린 스키마가 생성·폐기된다.
+    // 버전은 Spring Boot 3.3.5 BOM 이 관리하므로 명시하지 않는다.
+    testRuntimeOnly("com.h2database:h2")
+
     // Mockito: 가짜(Mock) 객체를 만들어 단위 테스트에서 외부 의존성을 격리합니다.
     testImplementation("org.mockito:mockito-core:5.14.2")
     testImplementation("org.mockito:mockito-junit-jupiter:5.14.2")

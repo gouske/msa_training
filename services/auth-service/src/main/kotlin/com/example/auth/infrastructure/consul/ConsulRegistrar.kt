@@ -5,6 +5,7 @@ import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.web.client.RestTemplateBuilder
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestTemplate
@@ -27,6 +28,12 @@ import java.net.InetAddress
  * Docker 환경에서 hostName 은 컨테이너 ID 라 다른 서비스가 DNS 해석을 못 함 —
  * 반드시 CONSUL_SERVICE_ADDRESS=auth-service 로 override 해야 한다.
  */
+// [P1 #1 / @SpringBootTest PostgreSQL 의존 분리]
+// 기본값 true → 운영/Docker/로컬 실행에서는 기존처럼 자동 등록.
+// 테스트 profile (application-test.yml) 에서 consul.enabled=false 로 두면
+// 이 빈이 컨텍스트에 아예 등록되지 않아 @PostConstruct register() 가 실행되지 않는다.
+// → @SpringBootTest 가 Consul(localhost:8500) 미가동 환경에서 무의미한 지연/실패 없이 뜬다.
+@ConditionalOnProperty(name = ["consul.enabled"], havingValue = "true", matchIfMissing = true)
 @Component
 class ConsulRegistrar(
     @Value("\${consul.host}") private val consulHost: String,
