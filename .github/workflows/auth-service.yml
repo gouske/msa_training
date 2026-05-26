@@ -72,6 +72,13 @@ jobs:
           SPRING_DATASOURCE_PASSWORD: testpass
           # JWT 비밀 키는 테스트 전용 더미값 사용 (실제 키 아님)
           JWT_SECRET_KEY: test-secret-key-for-ci-only-must-be-32chars
+          # [PR #31 / Codex 적대적 리뷰 high finding 대응]
+          # AuthProdLikeContextTest 가 @EnabledIfEnvironmentVariable 로 opt-in 처리되어
+          # 있어 이 변수가 없으면 CI 에서도 자동 skip 된다. CI runner 는 Docker 가 항상
+          # 가동되어 있어 Testcontainers PostgreSQL 컨테이너 기동이 가능하므로,
+          # 여기서 명시적으로 true 로 활성화하여 PR/merge 게이트에서 실제 prod-like
+          # 검증이 수행되도록 한다.
+          RUN_PROD_LIKE_TESTS: true
 
   # ─────────────────────────────────────────
   # Job 2: Docker 이미지 빌드 & 푸시 (CD)
