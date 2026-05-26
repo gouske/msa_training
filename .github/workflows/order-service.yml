@@ -76,7 +76,7 @@ jobs:
       #   latest  → 항상 최신 이미지
       #   git SHA → 특정 커밋의 이미지를 특정해 롤백 가능
       - name: Docker 이미지 빌드 & 푸시
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: services/order-service
           push: true
