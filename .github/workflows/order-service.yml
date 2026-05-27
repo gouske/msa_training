@@ -58,7 +58,11 @@ jobs:
     name: Docker 빌드 & 푸시
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # [Docker Hub 푸시 활성화 가드 — ENABLE_DOCKER_PUSH variable opt-in]
+    # repository variable `ENABLE_DOCKER_PUSH=true` 일 때만 실행.
+    # 미설정/false 면 main push 에서도 이 job 은 자동 skip → CI 가 green 으로 유지.
+    # 활성화 절차는 auth-service.yml 의 동일 가드 주석 참조.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_DOCKER_PUSH == 'true'
 
     steps:
       - name: 레포지토리 체크아웃
