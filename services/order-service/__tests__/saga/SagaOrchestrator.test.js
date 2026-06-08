@@ -191,4 +191,25 @@ describe('SagaOrchestrator', () => {
             expect(lastSavedSaga().state).toBe(SagaState.FAILED);
         });
     });
+
+    describe('handleReply() — 멱등성(중복 reply 무시)', () => {
+        test('이미 PAYMENT_CHARGED 인데 PAYMENT_SUCCEEDED 가 또 오면 무시한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture({ state: SagaState.PAYMENT_CHARGED }));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.PAYMENT_SUCCEEDED, payload: { paymentId: 'PAY-1' } });
+
+            // 중복이므로 포인트 command 재발행 없음, 상태 저장 없음
+            expect(mockPublisher.publish).not.toHaveBeenCalled();
+            expect(mockSagaRepo.save).not.toHaveBeenCalled();
+        });
+
+        test('이미 COMPLETED 인데 POINTS_SUCCEEDED 가 또 오면 무시한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture({ state: SagaState.COMPLETED }));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.POINTS_SUCCEEDED });
+
+            expect(mockOrderRepo.updateStatus).not.toHaveBeenCalled();
+            expect(mockSagaRepo.save).not.toHaveBeenCalled();
+        });
+    });
 });
