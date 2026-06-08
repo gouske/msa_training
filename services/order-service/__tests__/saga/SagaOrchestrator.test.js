@@ -141,4 +141,54 @@ describe('SagaOrchestrator', () => {
             expect(mockPublisher.publish).not.toHaveBeenCalled();
         });
     });
+
+    describe('handleReply() — 포인트 실패 → 2단계 보상', () => {
+        /** 결제까지 끝난(PAYMENT_CHARGED) saga — paymentId 보관됨 */
+        const chargedSaga = (overrides = {}) => sagaFixture({
+            state: SagaState.PAYMENT_CHARGED,
+            currentStep: STEP.POINTS,
+            steps: [
+                { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' } },
+                { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'buyer@test.com', amount: 10000 } },
+            ],
+            ...overrides,
+        });
+
+        test('POINTS_FAILED 면 COMPENSATING 으로 전이하고 환불 command(C2)를 발행한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(chargedSaga());
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.POINTS_FAILED, stepName: STEP.POINTS });
+
+            // 환불 command — paymentId 를 식별자로 포함
+            expect(mockPublisher.publish).toHaveBeenCalledWith(
+                QUEUE.PAYMENT_COMMAND,
+                expect.objectContaining({
+                    type: MSG.REFUND,
+                    stepName: STEP.PAYMENT,
+                    payload: { paymentId: 'PAY-1', orderId: 'order-1' },
+                }),
+            );
+            expect(lastSavedSaga().state).toBe(SagaState.COMPENSATING);
+            // 아직 재고 복원/주문 실패 처리는 하지 않는다 (환불 성공 reply 대기)
+            expect(mockInventoryRepo.release).not.toHaveBeenCalled();
+        });
+
+        test('REFUND_SUCCEEDED 면 재고를 복원하고 주문을 FAILED 로 종료한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(chargedSaga({
+                state: SagaState.COMPENSATING,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' } },
+                    { name: STEP.POINTS,    status: 'FAILED', payload: { userEmail: 'buyer@test.com', amount: 10000 } },
+                ],
+            }));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_SUCCEEDED, stepName: STEP.PAYMENT });
+
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2);
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+            expect(lastSavedSaga().state).toBe(SagaState.FAILED);
+        });
+    });
 });

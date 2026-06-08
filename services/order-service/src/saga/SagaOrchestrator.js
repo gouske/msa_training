@@ -99,6 +99,8 @@ class SagaOrchestrator {
             case MSG.PAYMENT_SUCCEEDED: return this._onPaymentSucceeded(saga, reply);
             case MSG.POINTS_SUCCEEDED:  return this._onPointsSucceeded(saga, reply);
             case MSG.PAYMENT_FAILED:    return this._onPaymentFailed(saga, reply);
+            case MSG.POINTS_FAILED:     return this._onPointsFailed(saga, reply);
+            case MSG.REFUND_SUCCEEDED:  return this._onRefundSucceeded(saga, reply);
             default: return; // 알 수 없는 타입 — 무시
         }
     }
@@ -145,6 +147,44 @@ class SagaOrchestrator {
         await this._sagaRepo.save(next);
 
         // C1 재고 복원 (로컬) — 예약했던 수량을 그대로 되돌린다
+        const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
+        await this._inventoryRepo.release(inv.itemId, inv.quantity);
+        next = this._markStep(next, STEP.INVENTORY, 'COMPENSATED');
+
+        await this._orderRepo.updateStatus(saga.orderId, 'FAILED');
+        next = this._transition(next, SagaState.FAILED);
+        await this._sagaRepo.save(next);
+    }
+
+    /** 포인트 실패: PAYMENT_CHARGED → COMPENSATING → 환불 command(C2) 발행 */
+    async _onPointsFailed(saga) {
+        if (saga.state !== SagaState.PAYMENT_CHARGED) return; // 멱등 가드
+
+        let next = this._markStep(saga, STEP.POINTS, 'FAILED');
+        next = this._transition(next, SagaState.COMPENSATING);
+        next = { ...next, currentStep: STEP.PAYMENT }; // 보상 진행 단계 표시
+        await this._sagaRepo.save(next);
+
+        // C2 결제 환불 command — 결제 단계에 보관해 둔 paymentId 로 "무엇을 환불할지" 식별
+        const paymentStep = saga.steps.find((s) => s.name === STEP.PAYMENT);
+        const paymentId = paymentStep.replyData && paymentStep.replyData.paymentId;
+        await this._publisher.publish(QUEUE.PAYMENT_COMMAND, {
+            sagaId: saga.sagaId,
+            type: MSG.REFUND,
+            stepName: STEP.PAYMENT,
+            payload: { paymentId, orderId: saga.orderId },
+            correlationId: saga.correlationId,
+        });
+    }
+
+    /** 환불 성공: COMPENSATING 중 결제 보상 완료 → 재고 복원(C1) → FAILED */
+    async _onRefundSucceeded(saga) {
+        if (saga.state !== SagaState.COMPENSATING) return; // 멱등 가드
+
+        let next = this._markStep(saga, STEP.PAYMENT, 'COMPENSATED');
+        await this._sagaRepo.save(next);
+
+        // C1 재고 복원 (로컬)
         const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
         await this._inventoryRepo.release(inv.itemId, inv.quantity);
         next = this._markStep(next, STEP.INVENTORY, 'COMPENSATED');
