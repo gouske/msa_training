@@ -87,6 +87,39 @@ class SagaOrchestrator {
         return { orderId, sagaId, status: 'PENDING' };
     }
 
+    /**
+     * 원격 참여자의 reply 를 받아 상태머신을 전이한다.
+     * @param {{sagaId:string, type:string, stepName?:string, payload?:object}} reply
+     */
+    async handleReply(reply) {
+        const saga = await this._sagaRepo.findBySagaId(reply.sagaId);
+        if (!saga) return; // 알 수 없는 saga — 무시
+
+        switch (reply.type) {
+            case MSG.PAYMENT_SUCCEEDED: return this._onPaymentSucceeded(saga, reply);
+            default: return; // 알 수 없는 타입 — 무시
+        }
+    }
+
+    /** 결제 성공: INVENTORY_RESERVED → PAYMENT_CHARGED, 포인트 command 발행 */
+    async _onPaymentSucceeded(saga, reply) {
+        if (saga.state !== SagaState.INVENTORY_RESERVED) return; // 멱등 가드(중복/순서뒤바뀜 무시)
+
+        let next = this._markStep(saga, STEP.PAYMENT, 'DONE', reply.payload);
+        next = this._transition(next, SagaState.PAYMENT_CHARGED);
+        next = { ...next, currentStep: STEP.POINTS };
+        await this._sagaRepo.save(next);
+
+        const pointsPayload = saga.steps.find((s) => s.name === STEP.POINTS).payload;
+        await this._publisher.publish(QUEUE.POINTS_COMMAND, {
+            sagaId: saga.sagaId,
+            type: MSG.EARN,
+            stepName: STEP.POINTS,
+            payload: pointsPayload,
+            correlationId: saga.correlationId,
+        });
+    }
+
     // ── private helpers ──────────────────────────────────────
 
     /** steps 배열에서 한 단계의 status(및 replyData)를 갱신한 새 saga 를 반환 (불변) */

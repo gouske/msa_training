@@ -61,4 +61,50 @@ describe('SagaOrchestrator', () => {
             expect(result.status).toBe('FAILED');
         });
     });
+
+    /** handleReply 테스트용 saga 픽스처 */
+    const sagaFixture = (overrides = {}) => ({
+        sagaId: 's1',
+        orderId: 'order-1',
+        state: SagaState.INVENTORY_RESERVED,
+        currentStep: STEP.PAYMENT,
+        correlationId: 'trace-1',
+        steps: [
+            { name: STEP.INVENTORY, status: 'DONE',    payload: { itemId: 'ITEM-1', quantity: 2 } },
+            { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId: 'order-1', amount: 10000 } },
+            { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'buyer@test.com', amount: 10000 } },
+        ],
+        ...overrides,
+    });
+
+    describe('handleReply() — 결제 성공', () => {
+        test('PAYMENT_SUCCEEDED 면 PAYMENT_CHARGED 로 전이하고 포인트 command 를 발행한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture());
+
+            await orchestrator.handleReply({
+                sagaId: 's1', type: MSG.PAYMENT_SUCCEEDED, stepName: STEP.PAYMENT,
+                payload: { paymentId: 'PAY-1' },
+            });
+
+            // 포인트 적립 command 발행
+            expect(mockPublisher.publish).toHaveBeenCalledWith(
+                QUEUE.POINTS_COMMAND,
+                expect.objectContaining({
+                    type: MSG.EARN,
+                    stepName: STEP.POINTS,
+                    payload: { userEmail: 'buyer@test.com', amount: 10000 },
+                }),
+            );
+            const saved = lastSavedSaga();
+            expect(saved.state).toBe(SagaState.PAYMENT_CHARGED);
+            // 결제 단계에 paymentId(replyData) 보관 — 나중에 환불 시 식별자로 사용
+            expect(saved.steps.find((s) => s.name === STEP.PAYMENT).replyData).toEqual({ paymentId: 'PAY-1' });
+        });
+
+        test('알 수 없는 sagaId 면 아무 동작도 하지 않는다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(null);
+            await orchestrator.handleReply({ sagaId: 'nope', type: MSG.PAYMENT_SUCCEEDED });
+            expect(mockPublisher.publish).not.toHaveBeenCalled();
+        });
+    });
 });
