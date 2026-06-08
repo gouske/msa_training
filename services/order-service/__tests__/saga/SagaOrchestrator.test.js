@@ -107,4 +107,23 @@ describe('SagaOrchestrator', () => {
             expect(mockPublisher.publish).not.toHaveBeenCalled();
         });
     });
+
+    describe('handleReply() — 포인트 성공 → 완료', () => {
+        test('POINTS_SUCCEEDED 면 주문을 SUCCESS 로 확정하고 COMPLETED 로 종료한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture({
+                state: SagaState.PAYMENT_CHARGED,
+                currentStep: STEP.POINTS,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' } },
+                    { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'buyer@test.com', amount: 10000 } },
+                ],
+            }));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.POINTS_SUCCEEDED, stepName: STEP.POINTS });
+
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'SUCCESS');
+            expect(lastSavedSaga().state).toBe(SagaState.COMPLETED);
+        });
+    });
 });

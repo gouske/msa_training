@@ -97,6 +97,7 @@ class SagaOrchestrator {
 
         switch (reply.type) {
             case MSG.PAYMENT_SUCCEEDED: return this._onPaymentSucceeded(saga, reply);
+            case MSG.POINTS_SUCCEEDED:  return this._onPointsSucceeded(saga, reply);
             default: return; // 알 수 없는 타입 — 무시
         }
     }
@@ -118,6 +119,20 @@ class SagaOrchestrator {
             payload: pointsPayload,
             correlationId: saga.correlationId,
         });
+    }
+
+    /** 포인트 성공: PAYMENT_CHARGED → POINTS_EARNED → 주문 확정 → COMPLETED */
+    async _onPointsSucceeded(saga) {
+        if (saga.state !== SagaState.PAYMENT_CHARGED) return; // 멱등 가드
+
+        let next = this._markStep(saga, STEP.POINTS, 'DONE');
+        next = this._transition(next, SagaState.POINTS_EARNED);
+        await this._sagaRepo.save(next);
+
+        // T4 주문 확정 (로컬)
+        await this._orderRepo.updateStatus(saga.orderId, 'SUCCESS');
+        next = this._transition(next, SagaState.COMPLETED);
+        await this._sagaRepo.save(next);
     }
 
     // ── private helpers ──────────────────────────────────────
