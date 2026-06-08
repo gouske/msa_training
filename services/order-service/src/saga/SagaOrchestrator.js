@@ -98,6 +98,7 @@ class SagaOrchestrator {
         switch (reply.type) {
             case MSG.PAYMENT_SUCCEEDED: return this._onPaymentSucceeded(saga, reply);
             case MSG.POINTS_SUCCEEDED:  return this._onPointsSucceeded(saga, reply);
+            case MSG.PAYMENT_FAILED:    return this._onPaymentFailed(saga, reply);
             default: return; // 알 수 없는 타입 — 무시
         }
     }
@@ -132,6 +133,24 @@ class SagaOrchestrator {
         // T4 주문 확정 (로컬)
         await this._orderRepo.updateStatus(saga.orderId, 'SUCCESS');
         next = this._transition(next, SagaState.COMPLETED);
+        await this._sagaRepo.save(next);
+    }
+
+    /** 결제 실패: INVENTORY_RESERVED → COMPENSATING → 재고 복원(C1) → FAILED */
+    async _onPaymentFailed(saga) {
+        if (saga.state !== SagaState.INVENTORY_RESERVED) return; // 멱등 가드
+
+        let next = this._markStep(saga, STEP.PAYMENT, 'FAILED');
+        next = this._transition(next, SagaState.COMPENSATING);
+        await this._sagaRepo.save(next);
+
+        // C1 재고 복원 (로컬) — 예약했던 수량을 그대로 되돌린다
+        const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
+        await this._inventoryRepo.release(inv.itemId, inv.quantity);
+        next = this._markStep(next, STEP.INVENTORY, 'COMPENSATED');
+
+        await this._orderRepo.updateStatus(saga.orderId, 'FAILED');
+        next = this._transition(next, SagaState.FAILED);
         await this._sagaRepo.save(next);
     }
 

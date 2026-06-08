@@ -126,4 +126,19 @@ describe('SagaOrchestrator', () => {
             expect(lastSavedSaga().state).toBe(SagaState.COMPLETED);
         });
     });
+
+    describe('handleReply() — 결제 실패 → 보상', () => {
+        test('PAYMENT_FAILED 면 재고를 복원하고 주문을 FAILED 로 종료한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture()); // state: INVENTORY_RESERVED
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.PAYMENT_FAILED, stepName: STEP.PAYMENT });
+
+            // C1 재고 복원 (예약했던 수량만큼)
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2);
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+            expect(lastSavedSaga().state).toBe(SagaState.FAILED);
+            // 포인트 command 는 발행되지 않아야 한다
+            expect(mockPublisher.publish).not.toHaveBeenCalled();
+        });
+    });
 });
