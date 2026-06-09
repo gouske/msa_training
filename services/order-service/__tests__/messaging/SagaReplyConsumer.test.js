@@ -13,6 +13,7 @@ describe('SagaReplyConsumer', () => {
             }),
             ack: jest.fn(),
             nack: jest.fn(),
+            on: jest.fn(), // 새 구현에서 channel.on('close', ...) 호출 시 필요
         };
         mockOrchestrator = { handleReply: jest.fn().mockResolvedValue(undefined) };
         consumer = new SagaReplyConsumer({
@@ -57,5 +58,67 @@ describe('SagaReplyConsumer', () => {
         await consumer.start();
         await consumeCallback(null);
         expect(mockOrchestrator.handleReply).not.toHaveBeenCalled();
+    });
+});
+
+describe('SagaReplyConsumer — 재시도/재구독', () => {
+    let mockChannel, mockOrchestrator;
+
+    beforeEach(() => {
+        jest.useFakeTimers();
+        mockChannel = {
+            assertQueue: jest.fn().mockResolvedValue(undefined),
+            consume: jest.fn().mockResolvedValue(undefined),
+            ack: jest.fn(),
+            nack: jest.fn(),
+            on: jest.fn(),
+        };
+        mockOrchestrator = { handleReply: jest.fn().mockResolvedValue(undefined) };
+    });
+
+    afterEach(() => {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+    });
+
+    test('start 가 실패하면 retryDelay 후 다시 시도한다', async () => {
+        // RabbitMQ 미준비 상황 시뮬레이션: 1차 시도 실패 → 2차 시도 성공
+        let attempt = 0;
+        const channelProvider = jest.fn().mockImplementation(() => {
+            attempt += 1;
+            if (attempt === 1) return Promise.reject(new Error('RabbitMQ 미준비'));
+            return Promise.resolve(mockChannel);
+        });
+        const consumer = new SagaReplyConsumer({
+            channelProvider,
+            orchestrator: mockOrchestrator,
+            retryDelayMs: 1000,
+        });
+
+        await consumer.start(); // 1차 시도 실패 → 재시도 예약
+        expect(channelProvider).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(1000); // 재시도 트리거
+        expect(channelProvider).toHaveBeenCalledTimes(2);
+        expect(mockChannel.consume).toHaveBeenCalledWith(QUEUE.REPLY, expect.any(Function));
+    });
+
+    test('채널 close 이벤트가 오면 재구독을 예약한다', async () => {
+        const channelProvider = jest.fn().mockResolvedValue(mockChannel);
+        const consumer = new SagaReplyConsumer({
+            channelProvider,
+            orchestrator: mockOrchestrator,
+            retryDelayMs: 1000,
+        });
+
+        await consumer.start();
+        expect(channelProvider).toHaveBeenCalledTimes(1);
+
+        // start 에서 등록한 close 핸들러를 꺼내 호출
+        const closeHandler = mockChannel.on.mock.calls.find(([evt]) => evt === 'close')[1];
+        closeHandler();
+
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(channelProvider).toHaveBeenCalledTimes(2); // 재구독 시도
     });
 });
