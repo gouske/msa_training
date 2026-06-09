@@ -12,6 +12,7 @@ import pytest
 
 from saga_consumer import handle_command
 from payment_contracts import QUEUE, MSG, STEP
+from payment_ledger import PaymentDeclinedError
 
 
 def _command(msg_type, payload, saga_id="saga-1"):
@@ -56,16 +57,56 @@ class TestCharge:
         assert reply["correlationId"] == "trace-1"  # correlationId 전파
         ch.basic_ack.assert_called_once_with(delivery_tag=7)
 
-    def test_charge_failure_publishes_payment_failed_and_acks(self, deps):
+    def test_charge_business_decline_publishes_payment_failed_and_acks(self, deps):
+        """
+        비즈니스 거절(한도 초과, 카드 거절 등) → PAYMENT_FAILED reply + ACK.
+        보상으로 처리하는 정상 흐름이므로 DLQ로 보내지 않음.
+        """
         ch, method, ledger = deps
-        ledger.charge.side_effect = RuntimeError("PG 거절")
+        ledger.charge.side_effect = PaymentDeclinedError("한도 초과")
 
         handle_command(ch, method, None, _command(MSG["CHARGE"], {"orderId": "order-1", "amount": 10000}), ledger)
 
         routing_key, reply = _published_reply(ch)
         assert reply["type"] == MSG["PAYMENT_FAILED"]
-        # 비즈니스 실패는 정상 흐름(보상으로 처리) → ACK (DLQ로 보내지 않음)
+        assert "한도 초과" in reply["payload"]["reason"]
+        # 비즈니스 거절은 정상 흐름 → ACK
         ch.basic_ack.assert_called_once_with(delivery_tag=7)
+        ch.basic_nack.assert_not_called()
+
+    def test_charge_infra_error_nacks_for_retry_without_reply(self, deps):
+        """
+        인프라 장애(MongoDB 연결 끊김, 네트워크 오류 등) → reply 없이 재시도(nack, requeue=True).
+        """
+        ch, method, ledger = deps
+        ledger.charge.side_effect = RuntimeError("MongoDB 연결 끊김")
+
+        handle_command(ch, method, None, _command(MSG["CHARGE"], {"orderId": "order-1", "amount": 10000}), ledger)
+
+        # reply 발행 없음
+        ch.basic_publish.assert_not_called()
+        # ACK 없음 (재시도 대기)
+        ch.basic_ack.assert_not_called()
+        # NACK with requeue=True (재시도 큐로 복귀)
+        ch.basic_nack.assert_called_once_with(delivery_tag=7, requeue=True)
+
+    def test_charge_malformed_payload_goes_to_dlq(self, deps):
+        """
+        malformed payload(필수 키 누락) → DLQ 격리(nack, requeue=False).
+        이미 재처리해도 동일한 결과이므로 DLQ로 보낸다.
+        """
+        ch, method, ledger = deps
+        # amount 키 누락 → payload["amount"] 접근 시 KeyError
+        handle_command(ch, method, None, _command(MSG["CHARGE"], {"orderId": "order-1"}), ledger)
+
+        # 원장에 접근하지 않음 (KeyError로 조기 반환)
+        ledger.charge.assert_not_called()
+        # reply 발행 없음
+        ch.basic_publish.assert_not_called()
+        # ACK 없음
+        ch.basic_ack.assert_not_called()
+        # NACK with requeue=False (DLQ로 이동, 재시도 안 함)
+        ch.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)
 
 
 class TestRefund:
@@ -90,3 +131,38 @@ class TestUnknownType:
         ch.basic_publish.assert_not_called()
         ledger.charge.assert_not_called()
         ch.basic_ack.assert_called_once_with(delivery_tag=7)  # 알 수 없는 타입은 버리고 ACK
+
+
+class TestMalformedMessage:
+    def test_invalid_json_goes_to_dlq(self, deps):
+        """
+        잘못된 JSON(파싱 실패) → DLQ 격리(nack, requeue=False).
+        재처리해도 동일하게 파싱 실패하므로 DLQ로 보낸다.
+        """
+        ch, method, ledger = deps
+
+        handle_command(ch, method, None, b"not json", ledger)
+
+        # reply 발행 없음
+        ch.basic_publish.assert_not_called()
+        # ACK 없음
+        ch.basic_ack.assert_not_called()
+        # NACK with requeue=False (DLQ로 이동)
+        ch.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)
+
+    def test_missing_required_field_goes_to_dlq(self, deps):
+        """
+        필수 필드 누락(sagaId/type 없음) → DLQ 격리(nack, requeue=False).
+        """
+        ch, method, ledger = deps
+        # sagaId 없는 명령
+        malformed = json.dumps({
+            "type": MSG["CHARGE"],
+            "payload": {"orderId": "order-1", "amount": 10000},
+        }).encode()
+
+        handle_command(ch, method, None, malformed, ledger)
+
+        ch.basic_publish.assert_not_called()
+        ch.basic_ack.assert_not_called()
+        ch.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)

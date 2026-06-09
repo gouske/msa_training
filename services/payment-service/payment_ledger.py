@@ -14,6 +14,21 @@ from uuid import uuid4
 from pymongo.errors import DuplicateKeyError
 
 
+class PaymentDeclinedError(Exception):
+    """
+    결제/환불이 비즈니스 규칙상 거절됨(예: 한도 초과, 카드 거절).
+
+    인프라 장애와 구분하기 위한 명시적 예외입니다. 이 예외가 발생하면
+    "보상으로 처리하는 정상 흐름"이므로, Saga consumer는 *_FAILED reply를
+    보내고 메시지를 ACK합니다(DLQ로 보내지 않음).
+
+    학습 포인트(Phase 2 오류 분류):
+      - PaymentDeclinedError → FAILED reply + ACK (보상으로 처리)
+      - KeyError (malformed) → DLQ 격리(nack, requeue=False)
+      - RuntimeError/Exception (인프라) → 재시도(nack, requeue=True)
+    """
+
+
 class PaymentLedger:
     """결제 원장. 컬렉션을 주입받아 멱등 charge/refund를 제공한다."""
 
