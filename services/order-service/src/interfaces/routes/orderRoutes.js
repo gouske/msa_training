@@ -40,13 +40,16 @@ function defaultIsDbConnected() {
 /**
  * @param {object} deps
  * @param {OrderService} deps.orderService 비즈니스 서비스
+ * @param {Orchestrator} [deps.orchestrator] Saga 패턴 오케스트레이터.
+ *   주입되면 POST /api/order 가 orchestrator.startOrder() 로 처리된다(Saga 흐름).
+ *   미주입 시 기존 orderService.createOrder() 경로(레거시)를 사용한다.
  * @param {string} deps.internalApiKey Payment Service 와 공유하는 내부 키
  * @param {() => boolean} [deps.isDbConnected] DB 연결 상태 검사기.
  *   미주입 시 mongoose.connection.readyState === 1 을 기본 사용한다.
  *   테스트에서는 격리를 위해 명시적으로 주입한다.
  * @returns {express.Router}
  */
-function createOrderRouter({ orderService, internalApiKey, isDbConnected = defaultIsDbConnected }) {
+function createOrderRouter({ orderService, orchestrator = null, internalApiKey, isDbConnected = defaultIsDbConnected }) {
     const router = express.Router();
 
     /**
@@ -70,7 +73,11 @@ function createOrderRouter({ orderService, internalApiKey, isDbConnected = defau
 
         const { itemId, quantity, price } = req.body;
         try {
-            const result = await orderService.createOrder(userEmail, itemId, quantity, price, correlationId);
+            // orchestrator가 주입되면 Saga 흐름(재고 예약 → 결제 command 발행)으로 처리한다.
+            // 미주입 시 기존 레거시 흐름(order_queue 발행)을 그대로 사용한다.
+            const result = orchestrator
+                ? await orchestrator.startOrder({ userEmail, itemId, quantity, price, correlationId })
+                : await orderService.createOrder(userEmail, itemId, quantity, price, correlationId);
             return res.status(202).json({
                 message: '주문이 접수되었습니다. 결제가 백그라운드에서 처리됩니다.',
                 ...result,

@@ -267,3 +267,50 @@ describe('GET /api/order/health (헬스 체크)', () => {
         expect(res.body).toMatchObject({ status: 'unhealthy', db: 'down' });
     });
 });
+
+// ==========================================================
+// POST /api/order — Saga 흐름(orchestrator 주입 시)
+// ==========================================================
+
+describe('POST /api/order — Saga 흐름(orchestrator 주입 시)', () => {
+    function buildApp(orchestrator) {
+        const app = express();
+        app.use(express.json());
+        const router = createOrderRouter({
+            orderService: { createOrder: jest.fn() }, // 레거시 — 호출되면 안 됨
+            orchestrator,
+            internalApiKey: 'test-key',
+            isDbConnected: () => true,
+        });
+        app.use('/api/order', router);
+        return app;
+    }
+
+    test('orchestrator 가 주입되면 startOrder 를 호출하고 202 로 sagaId 를 반환한다', async () => {
+        const orchestrator = {
+            startOrder: jest.fn().mockResolvedValue({ orderId: 'order-1', sagaId: 'saga-1', status: 'PENDING' }),
+        };
+        const app = buildApp(orchestrator);
+
+        const res = await request(app)
+            .post('/api/order')
+            .set('x-user-email', 'buyer@test.com')
+            .send({ itemId: 'ITEM-1', quantity: 2, price: 5000 });
+
+        expect(res.status).toBe(202);
+        expect(res.body).toMatchObject({ orderId: 'order-1', sagaId: 'saga-1', status: 'PENDING' });
+        expect(orchestrator.startOrder).toHaveBeenCalledWith(expect.objectContaining({
+            userEmail: 'buyer@test.com', itemId: 'ITEM-1', quantity: 2, price: 5000,
+        }));
+    });
+
+    test('X-User-Email 이 없으면 401 (Saga 경로도 동일 방어)', async () => {
+        const orchestrator = { startOrder: jest.fn() };
+        const app = buildApp(orchestrator);
+
+        const res = await request(app).post('/api/order').send({ itemId: 'ITEM-1', quantity: 1, price: 5000 });
+
+        expect(res.status).toBe(401);
+        expect(orchestrator.startOrder).not.toHaveBeenCalled();
+    });
+});
