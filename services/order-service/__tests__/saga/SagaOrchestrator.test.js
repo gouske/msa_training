@@ -192,6 +192,33 @@ describe('SagaOrchestrator', () => {
         });
     });
 
+    describe('handleReply() — 포인트 비활성(POINTS_ENABLED=false)', () => {
+        test('PAYMENT_SUCCEEDED 면 포인트 command 없이 주문을 SUCCESS 로 확정하고 COMPLETED 로 종료한다', async () => {
+            // 포인트 비활성 orchestrator (기존 의존성 재사용)
+            const noPoints = new SagaOrchestrator({
+                orderRepository: mockOrderRepo,
+                inventoryRepository: mockInventoryRepo,
+                sagaRepository: mockSagaRepo,
+                commandPublisher: mockPublisher,
+                pointsEnabled: false,
+            });
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture()); // state: INVENTORY_RESERVED
+
+            await noPoints.handleReply({
+                sagaId: 's1', type: MSG.PAYMENT_SUCCEEDED, stepName: STEP.PAYMENT,
+                payload: { paymentId: 'PAY-1' },
+            });
+
+            // 포인트 command 미발행
+            expect(mockPublisher.publish).not.toHaveBeenCalled();
+            // 주문 확정 + COMPLETED
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'SUCCESS');
+            expect(lastSavedSaga().state).toBe(SagaState.COMPLETED);
+            // 결제 단계 paymentId 보관은 유지
+            expect(lastSavedSaga().steps.find((s) => s.name === STEP.PAYMENT).replyData).toEqual({ paymentId: 'PAY-1' });
+        });
+    });
+
     describe('handleReply() — 멱등성(중복 reply 무시)', () => {
         test('이미 PAYMENT_CHARGED 인데 PAYMENT_SUCCEEDED 가 또 오면 무시한다', async () => {
             mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture({ state: SagaState.PAYMENT_CHARGED }));

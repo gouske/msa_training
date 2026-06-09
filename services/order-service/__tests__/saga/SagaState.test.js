@@ -19,6 +19,10 @@ describe('SagaState 전이 규칙', () => {
         expect(canTransition(SagaState.PAYMENT_CHARGED, SagaState.COMPENSATING)).toBe(true);
     });
 
+    test('PAYMENT_CHARGED → COMPLETED 는 허용된다 (포인트 비활성 시 직접 완료)', () => {
+        expect(canTransition(SagaState.PAYMENT_CHARGED, SagaState.COMPLETED)).toBe(true);
+    });
+
     test('POINTS_EARNED → COMPLETED 는 허용된다', () => {
         expect(canTransition(SagaState.POINTS_EARNED, SagaState.COMPLETED)).toBe(true);
     });

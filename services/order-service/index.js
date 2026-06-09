@@ -66,11 +66,17 @@ const inventoryRepository = new MongoInventoryRepository();
 const sagaRepository = new MongoSagaRepository();
 const rabbit = new RabbitMQConnection();
 const commandPublisher = new SagaCommandPublisher(() => rabbit.getChannel());
+
+// [제25강 Saga Phase 2] 포인트 participant(auth)는 Phase 3에서 구현된다.
+// 그 전까지는 결제 성공 시 포인트를 건너뛰고 주문을 완료한다(환경변수 미설정 시 비활성).
+const POINTS_ENABLED = process.env.POINTS_ENABLED === 'true';
+
 const sagaOrchestrator = new SagaOrchestrator({
     orderRepository,
     inventoryRepository,
     sagaRepository,
     commandPublisher,
+    pointsEnabled: POINTS_ENABLED,
 });
 const sagaReplyConsumer = new SagaReplyConsumer({
     channelProvider: () => rabbit.getChannel(),

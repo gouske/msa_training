@@ -79,6 +79,8 @@ services:
       CONSUL_HOST: consul-server
       CONSUL_PORT: 8500
       CONSUL_SERVICE_ADDRESS: order-service-1
+      # [제25강 Saga Phase 2] 포인트 단계 활성화 여부 (Phase 2에서는 비활성)
+      POINTS_ENABLED: "false"
     labels:
       service: "order-service"
     depends_on:
@@ -101,6 +103,8 @@ services:
       CONSUL_HOST: consul-server
       CONSUL_PORT: 8500
       CONSUL_SERVICE_ADDRESS: order-service-2
+      # [제25강 Saga Phase 2] 포인트 단계 활성화 여부 (Phase 2에서는 비활성)
+      POINTS_ENABLED: "false"
     labels:
       service: "order-service"
     depends_on:
