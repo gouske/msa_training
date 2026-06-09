@@ -28,3 +28,7 @@ uvicorn==0.42.0
 # Phase 1 (Order/Node) 와 동일한 라벨 의미·once-guard·dependency gauge 패턴을 보장하기 위해
 # 직접 미들웨어를 작성한다.
 prometheus-client==0.21.1
+# [제25강 Saga Phase 2] 결제 원장 MongoDB 드라이버 (동기) — Saga consumer 스레드와 동일한 동기 컨텍스트
+pymongo==4.10.1
+# [제25강 Saga Phase 2] 결제 원장 단위 테스트용 인메모리 MongoDB (실제 mongod 없이 멱등성 검증)
+mongomock==4.3.0
