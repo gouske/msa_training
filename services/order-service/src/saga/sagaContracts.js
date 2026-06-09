@@ -37,4 +37,27 @@ const STEP = Object.freeze({
     POINTS:    'T3_POINTS',
 });
 
-module.exports = { QUEUE, MSG, STEP };
+/**
+ * 큐 이름 → DLQ(Dead Letter Queue) 이름.
+ * payment-service payment_contracts.dlq_name() 과 동일 규칙이어야 한다.
+ */
+function dlqName(queue) {
+    return `${queue}.dlq`;
+}
+
+/**
+ * assertQueue 옵션 — durable + NACK 메시지를 DLQ로 라우팅.
+ * publisher/consumer가 같은 옵션으로 선언해야 RabbitMQ 큐 속성 충돌이 없다.
+ * payment-service queue_arguments() 와 1:1 대응.
+ */
+function queueAssertOptions(queue) {
+    return {
+        durable: true,
+        arguments: {
+            'x-dead-letter-exchange': '',
+            'x-dead-letter-routing-key': dlqName(queue),
+        },
+    };
+}
+
+module.exports = { QUEUE, MSG, STEP, dlqName, queueAssertOptions };
