@@ -51,8 +51,29 @@ class PointService(
 
     @Transactional
     override fun cancel(sagaId: String, stepName: String, userEmail: String, amount: Long) {
-        TODO("Task 4 에서 구현")
+        val idemKey = cancelKey(sagaId, stepName)
+
+        // 멱등: 이미 취소한 명령이면 아무것도 하지 않는다.
+        if (txRepo.findByIdempotencyKey(idemKey) != null) return
+
+        // 적립 이력(잔액 계정)이 없으면 보상할 게 없다 → 안전한 no-op.
+        val balance = balanceRepo.findById(userEmail).orElse(null) ?: return
+
+        // 의미적 취소: 적립분을 차감(음수 방지).
+        balance.balance = (balance.balance - amount).coerceAtLeast(0L)
+        balance.updatedAt = LocalDateTime.now()
+        balanceRepo.save(balance)
+        txRepo.save(
+            PointTransaction(
+                userEmail = userEmail,
+                amount = amount,
+                type = PointTransactionType.CANCEL,
+                idempotencyKey = idemKey,
+            ),
+        )
     }
 
     private fun earnKey(sagaId: String, stepName: String): String = "$sagaId:$stepName"
+
+    private fun cancelKey(sagaId: String, stepName: String): String = "$sagaId:$stepName:CANCEL"
 }

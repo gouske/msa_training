@@ -49,4 +49,33 @@ class PointServiceTest @Autowired constructor(
         assertEquals(0, balanceRepo.findById("suspended@test.com").get().balance)
         assertEquals(0, txRepo.count())
     }
+
+    @Test
+    fun `취소하면 적립했던 포인트가 차감되고 CANCEL이 원장에 기록된다`() {
+        pointService.earn("saga-1", "T3_POINTS", "user@test.com", 100)
+
+        pointService.cancel("saga-1", "T3_POINTS", "user@test.com", 100)
+
+        assertEquals(0, balanceRepo.findById("user@test.com").get().balance)
+        assertEquals(2, txRepo.count()) // EARN + CANCEL
+    }
+
+    @Test
+    fun `같은 취소 명령이 중복돼도 한 번만 차감된다`() {
+        pointService.earn("saga-1", "T3_POINTS", "user@test.com", 100)
+
+        pointService.cancel("saga-1", "T3_POINTS", "user@test.com", 100)
+        pointService.cancel("saga-1", "T3_POINTS", "user@test.com", 100)
+
+        assertEquals(0, balanceRepo.findById("user@test.com").get().balance)
+        assertEquals(2, txRepo.count()) // CANCEL 은 한 번만
+    }
+
+    @Test
+    fun `적립 이력이 없는 사용자 취소는 안전한 no-op이다`() {
+        pointService.cancel("saga-x", "T3_POINTS", "ghost@test.com", 100)
+
+        assertEquals(0, txRepo.count())
+        assertEquals(false, balanceRepo.findById("ghost@test.com").isPresent)
+    }
 }
