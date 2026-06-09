@@ -50,6 +50,10 @@ dependencies {
     // implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
+    // [제25강 Saga Phase 3] RabbitMQ(Spring AMQP) — saga.points.command consumer + saga.reply publisher.
+    //   order-service(amqplib)·payment-service(pika)와 동일한 큐/DLQ 계약으로 통신한다.
+    implementation("org.springframework.boot:spring-boot-starter-amqp")
+
     compileOnly("org.projectlombok:lombok")
     runtimeOnly("org.postgresql:postgresql")
     annotationProcessor("org.projectlombok:lombok")

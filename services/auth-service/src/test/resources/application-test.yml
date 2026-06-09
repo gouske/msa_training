@@ -60,6 +60,9 @@ consul:
 management:
   server:
     port: -1
+  health:
+    rabbit:
+      enabled: false
 
 # 테스트 로그는 WARN 이상만 — 실행이 깔끔해진다.
 logging:
@@ -67,3 +70,8 @@ logging:
     org.hibernate.SQL: warn
     org.hibernate.type.descriptor.sql.BasicBinder: warn
     org.springframework.orm.jpa: warn
+
+# [제25강 Saga Phase 3] 테스트에서는 Saga 메시징 배선을 끈다 — RabbitMQ 미연결 상태로 컨텍스트 로딩.
+saga:
+  messaging:
+    enabled: false
