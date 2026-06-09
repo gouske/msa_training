@@ -127,11 +127,14 @@ services:
       CONSUL_HOST: consul-server
       CONSUL_PORT: 8500
       CONSUL_SERVICE_ADDRESS: payment-service
+      # [제25강 Saga Phase 2] 결제 원장 MongoDB — order-db 인스턴스 재사용, payment_db 데이터베이스
+      MONGO_URI: mongodb://order-db:27017/payment_db
     labels:
       service: "payment-service"
     depends_on:
       - rabbitmq  # Consumer가 시작되려면 RabbitMQ가 먼저 실행되어야 합니다.
       - consul-server           # [실전 #6] 추가
+      - order-db                # [제25강] 결제 원장(payment_db)이 order-db mongod 인스턴스를 재사용
 
   # 1. 서비스 이름
   auth-db:
