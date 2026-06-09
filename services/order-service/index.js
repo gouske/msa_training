@@ -27,6 +27,14 @@ const { createOrderRouter } = require('./src/interfaces/routes/orderRoutes');
 // [제24강] Prometheus 메트릭 — RED (Rate, Errors, Duration) 자동 수집
 const { createMetrics } = require('./src/infrastructure/metrics');
 
+// [제25강 Saga Phase 2] Saga 오케스트레이션 의존성
+const MongoInventoryRepository = require('./src/infrastructure/persistence/MongoInventoryRepository');
+const MongoSagaRepository = require('./src/infrastructure/persistence/MongoSagaRepository');
+const { SagaOrchestrator } = require('./src/saga/SagaOrchestrator');
+const { RabbitMQConnection } = require('./src/infrastructure/messaging/RabbitMQConnection');
+const { SagaCommandPublisher } = require('./src/infrastructure/messaging/SagaCommandPublisher');
+const { SagaReplyConsumer } = require('./src/infrastructure/messaging/SagaReplyConsumer');
+
 const PORT = 8081;
 
 const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/order_db';
@@ -52,8 +60,35 @@ const messagePublisher = { publish: sendOrderMessage };
 // 3. 애플리케이션 서비스: 저장소 + 메시지 발행자 주입
 const orderService = new OrderService(orderRepository, messagePublisher);
 
-// 4. 라우터: 서비스 + 내부 키 주입
-const orderRouter = createOrderRouter({ orderService, internalApiKey: INTERNAL_API_KEY });
+// 4-a. [제25강 Saga] Saga 오케스트레이션 조립
+//      재고/Saga 저장소 + 상주 RabbitMQ 연결 + command publisher + reply consumer
+const inventoryRepository = new MongoInventoryRepository();
+const sagaRepository = new MongoSagaRepository();
+const rabbit = new RabbitMQConnection();
+const commandPublisher = new SagaCommandPublisher(() => rabbit.getChannel());
+
+// [제25강 Saga Phase 2] 포인트 participant(auth)는 Phase 3에서 구현된다.
+// 그 전까지는 결제 성공 시 포인트를 건너뛰고 주문을 완료한다(환경변수 미설정 시 비활성).
+const POINTS_ENABLED = process.env.POINTS_ENABLED === 'true';
+
+const sagaOrchestrator = new SagaOrchestrator({
+    orderRepository,
+    inventoryRepository,
+    sagaRepository,
+    commandPublisher,
+    pointsEnabled: POINTS_ENABLED,
+});
+const sagaReplyConsumer = new SagaReplyConsumer({
+    channelProvider: () => rabbit.getChannel(),
+    orchestrator: sagaOrchestrator,
+});
+
+// 4-b. 라우터: 서비스 + orchestrator(Saga) + 내부 키 주입
+const orderRouter = createOrderRouter({
+    orderService,
+    orchestrator: sagaOrchestrator,
+    internalApiKey: INTERNAL_API_KEY,
+});
 
 // -----------------------------------------------------------
 // Express 앱 구성
@@ -104,6 +139,13 @@ mongoose.connect(mongoURI)
 function startHttpServer() {
     app.listen(PORT, () => {
         console.log(`🚀 주문 서비스가 http://localhost:${PORT} 에서 시작되었습니다.`);
+
+        // [제25강 Saga Phase 2] saga.reply 구독 시작 — participant들의 응답을 수신해 상태머신을 전이.
+        // RabbitMQ 미준비 시 실패할 수 있으므로 에러는 경고만 남기고 서버 자체는 계속 뜬다
+        // (consumer는 RabbitMQConnection이 다음 getChannel 호출 때 재연결을 시도한다).
+        sagaReplyConsumer.start().catch((err) => {
+            console.warn('⚠️ saga.reply consumer 시작 실패(재시도 대상):', err.message);
+        });
 
         // [실전 #6 + K8s 회고] Consul 자기 등록.
         //

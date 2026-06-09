@@ -81,6 +81,14 @@ node index.js  # 실행
 ## 핵심 파일
 
 - `index.js` — 메인 Express 앱 (라우팅 + X-User-Email 헤더 읽기)
-- `producer.js` — RabbitMQ 메시지 발행 모듈 (order_queue에 주문 데이터 전송)
+- `producer.js` — RabbitMQ 메시지 발행 모듈 (order_queue에 주문 데이터 전송, 레거시)
 - `models/Order.js` — MongoDB 스키마 정의
 - `circuitBreaker.js` — (비활성화) Auth Service 보호용 서킷 브레이커 (제17강 학습 참고용)
+- `src/saga/` — Saga 오케스트레이션(상태머신 + 계약). [제25강]
+- `src/infrastructure/messaging/` — Saga용 RabbitMQ 연결/발행/수신. [제25강 Phase 2]
+  - `RabbitMQConnection.js` — 상주 연결/채널
+  - `SagaCommandPublisher.js` — command 발행(commandPublisher 구현)
+  - `SagaReplyConsumer.js` — saga.reply 수신 → handleReply
+
+> [제25강 Phase 2] 주문 라우트는 이제 Saga 오케스트레이션(재고 예약 → 결제 command)으로 처리된다.
+> 기존 order_queue 레거시 흐름은 코드로 보존되어 있으나 라우트에서 호출되지 않는다.

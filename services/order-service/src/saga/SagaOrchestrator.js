@@ -23,12 +23,16 @@ class SagaOrchestrator {
      * @param {{reserve:Function, release:Function}} deps.inventoryRepository
      * @param {{save:Function, findBySagaId:Function}} deps.sagaRepository
      * @param {{publish:Function}} deps.commandPublisher
+     * @param {boolean} [deps.pointsEnabled=true] 포인트 단계 활성화 여부
      */
-    constructor({ orderRepository, inventoryRepository, sagaRepository, commandPublisher }) {
+    constructor({ orderRepository, inventoryRepository, sagaRepository, commandPublisher, pointsEnabled = true }) {
         this._orderRepo = orderRepository;
         this._inventoryRepo = inventoryRepository;
         this._sagaRepo = sagaRepository;
         this._publisher = commandPublisher;
+        // 포인트(auth) participant 가 준비되기 전(Phase 2)에는 false 로 주입해
+        // 결제 성공 시 포인트 단계를 건너뛰고 주문을 바로 확정한다. (Phase 3에서 true)
+        this._pointsEnabled = pointsEnabled;
     }
 
     /**
@@ -105,7 +109,7 @@ class SagaOrchestrator {
         }
     }
 
-    /** 결제 성공: INVENTORY_RESERVED → PAYMENT_CHARGED, 포인트 command 발행 */
+    /** 결제 성공: INVENTORY_RESERVED → PAYMENT_CHARGED, 포인트 활성 여부에 따라 command/완료 분기 */
     async _onPaymentSucceeded(saga, reply) {
         if (saga.state !== SagaState.INVENTORY_RESERVED) return; // 멱등 가드(중복/순서뒤바뀜 무시)
 
@@ -113,6 +117,15 @@ class SagaOrchestrator {
         next = this._transition(next, SagaState.PAYMENT_CHARGED);
         next = { ...next, currentStep: STEP.POINTS };
         await this._sagaRepo.save(next);
+
+        if (!this._pointsEnabled) {
+            // [Phase 2] 포인트 participant 미가동 — 결제 성공 시 바로 주문 확정(COMPLETED).
+            // 포인트 단계를 건너뛰므로 POINTS_EARNED 를 거치지 않고 COMPLETED 로 직접 전이한다.
+            await this._orderRepo.updateStatus(saga.orderId, 'SUCCESS');
+            next = this._transition(next, SagaState.COMPLETED);
+            await this._sagaRepo.save(next);
+            return;
+        }
 
         const pointsPayload = saga.steps.find((s) => s.name === STEP.POINTS).payload;
         await this._publisher.publish(QUEUE.POINTS_COMMAND, {

@@ -21,7 +21,8 @@ const SagaState = Object.freeze({
 const TRANSITIONS = Object.freeze({
     [SagaState.STARTED]:             [SagaState.INVENTORY_RESERVED, SagaState.FAILED],
     [SagaState.INVENTORY_RESERVED]:  [SagaState.PAYMENT_CHARGED, SagaState.COMPENSATING],
-    [SagaState.PAYMENT_CHARGED]:     [SagaState.POINTS_EARNED, SagaState.COMPENSATING],
+    // COMPLETED 는 포인트 단계 비활성(Phase 2) 시 결제 성공 → 바로 주문 확정 경로
+    [SagaState.PAYMENT_CHARGED]:     [SagaState.POINTS_EARNED, SagaState.COMPENSATING, SagaState.COMPLETED],
     [SagaState.POINTS_EARNED]:       [SagaState.COMPLETED],
     [SagaState.COMPENSATING]:        [SagaState.FAILED, SagaState.COMPENSATION_FAILED],
     [SagaState.COMPLETED]:           [],

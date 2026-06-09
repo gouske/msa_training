@@ -51,7 +51,10 @@ order_queue 메시지 수신
 
 ## 구현 상태
 
-현재 **목(Mock) 구현**으로, 항상 `COMPLETED`를 반환한다. 실제 결제 로직은 미구현.
+- 레거시 `order_queue` 흐름: **목(Mock)** — `process_payment()`가 항상 `COMPLETED` 반환(보존).
+- [제25강 Saga Phase 2] `saga.payment.command` 흐름: 결제 원장(MongoDB `payment_db`)에
+  멱등(`sagaId:stepName`)으로 기록하고 `saga.reply`로 `PAYMENT_SUCCEEDED`/`PAYMENT_FAILED`,
+  `REFUND_SUCCEEDED`/`REFUND_FAILED`를 발행한다.
 
 ## 환경 변수
 
@@ -60,8 +63,12 @@ order_queue 메시지 수신
 | `RABBITMQ_HOST` | `localhost` | `rabbitmq` |
 | `ORDER_SERVICE_URL` | `http://localhost:8081` | `http://order-service:8081` |
 | `INTERNAL_API_KEY` | `msa-training-internal-key-2026` | 동일 (Order Service와 공유) |
+| `MONGO_URI` | `mongodb://localhost:27017/payment_db` | `mongodb://order-db:27017/payment_db` |
 | `PYTHONUNBUFFERED` | — | `1` (Docker 로그 즉시 출력) |
 
 ## 핵심 파일
 
 - `main.py` — FastAPI 앱 전체 (HTTP 엔드포인트 + RabbitMQ Consumer 통합, 단일 파일 구성)
+- `payment_contracts.py` — Saga 계약 상수(order-service sagaContracts.js 미러) [제25강]
+- `payment_ledger.py` — 결제 원장(MongoDB) 멱등 charge/refund [제25강]
+- `saga_consumer.py` — saga.payment.command consumer + saga.reply 발행 [제25강]
