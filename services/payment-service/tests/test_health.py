@@ -41,7 +41,9 @@ def test_health_endpoint_200(httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPa
     )
 
     # WHEN: TestClient를 with 블록으로 감싸면 lifespan(startup/shutdown)이 실행됨
-    with patch("main.start_consumer"):  # RabbitMQ consumer 스레드 비활성화
+    with patch("main.start_consumer"), \
+         patch("main.start_saga_consumer"), \
+         patch("main.MongoClient"):
         with TestClient(app) as client:
             resp = client.get("/api/payment/health")
 

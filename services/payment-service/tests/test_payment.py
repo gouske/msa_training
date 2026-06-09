@@ -31,9 +31,11 @@ def client():
     """
     TestClient는 FastAPI 앱에 HTTP 요청을 보내는 테스트 전용 도구입니다.
     with 문으로 감싸면 lifespan 이벤트(startup/shutdown)도 실행됩니다.
-    여기서는 RabbitMQ consumer 스레드를 mock하여 실제 연결 없이 테스트합니다.
+    여기서는 RabbitMQ consumer 스레드와 MongoDB를 mock하여 실제 연결 없이 테스트합니다.
     """
-    with patch("main.start_consumer"):  # RabbitMQ consumer 스레드 비활성화
+    with patch("main.start_consumer"), \
+         patch("main.start_saga_consumer"), \
+         patch("main.MongoClient"):
         with TestClient(app) as c:
             yield c
 

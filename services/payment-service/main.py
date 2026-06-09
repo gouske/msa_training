@@ -29,6 +29,10 @@ from infrastructure.consul_lookup import find_instance, OrderUnreachableError
 from infrastructure.correlation_id import normalize_correlation_id
 # [제24강 Phase 2] Prometheus 메트릭 — RED + dependency gauge
 from infrastructure.metrics import create_metrics
+# [제25강 Saga Phase 2] 결제 원장 + Saga command consumer
+from pymongo import MongoClient
+from payment_ledger import PaymentLedger
+from saga_consumer import start_saga_consumer
 
 # --- 환경 변수 ---
 # [실전 #6] ORDER_SERVICE_URL 제거 — 이제 Consul을 통해 동적으로 Order 인스턴스를 찾는다.
@@ -40,6 +44,10 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 if not INTERNAL_API_KEY:
     raise RuntimeError("INTERNAL_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
+# [제25강 Saga Phase 2] 결제 원장 MongoDB 주소.
+# 기존 order-db(mongod) 인스턴스를 재사용하되, payment_db 라는 별도 데이터베이스에 저장한다.
+# Docker: mongodb://order-db:27017/payment_db , 로컬: mongodb://localhost:27017/payment_db
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/payment_db")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RabbitMQ Consumer (비동기 결제 처리)
@@ -206,6 +214,20 @@ async def lifespan(app: FastAPI):
     )
     consumer_thread.start()
     print("🚀 RabbitMQ Consumer 스레드 시작됨")
+
+    # [제25강 Saga Phase 2] 결제 원장 + Saga command consumer 스레드 시작.
+    # 레거시 order_queue consumer와 별개의 스레드로 saga.payment.command를 구독한다(관심사 분리).
+    mongo_client = MongoClient(MONGO_URI)
+    ledger = PaymentLedger(mongo_client.get_default_database()["payments"])
+    app.state.mongo_client = mongo_client
+    saga_thread = threading.Thread(
+        target=start_saga_consumer,
+        args=(ledger,),
+        daemon=True,
+        name="saga-payment-consumer",
+    )
+    saga_thread.start()
+    print("🚀 Saga 결제 consumer 스레드 시작됨")
 
     # [실전 #6 + K8s 회고] Consul 자기 등록.
     #
