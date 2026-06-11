@@ -48,6 +48,14 @@ class PointsCommandHandlerTest {
         ),
     )
 
+    private fun earnCommandWithAmount(amount: Any?) = body(
+        mapOf(
+            "sagaId" to "saga-1", "type" to "EARN", "stepName" to "T3_POINTS",
+            "payload" to mapOf("userEmail" to "user@test.com", "amount" to amount),
+            "correlationId" to "corr-1",
+        ),
+    )
+
     @Test
     fun `EARN 성공이면 POINTS_SUCCEEDED reply 후 ACK`() {
         val port = FakePointPort()
@@ -155,5 +163,67 @@ class PointsCommandHandlerTest {
         assertEquals(AckDecision.ACK, decision)
         assertTrue(pub.replies.isEmpty())
         assertNull(port.earnCalls.firstOrNull())
+    }
+
+    @Test
+    fun `EARN amount가 0이면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper).handle(earnCommandWithAmount(0))
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.earnCalls.isEmpty())
+        assertTrue(pub.replies.isEmpty())
+    }
+
+    @Test
+    fun `EARN amount가 음수면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper).handle(earnCommandWithAmount(-100))
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.earnCalls.isEmpty())
+    }
+
+    @Test
+    fun `EARN amount가 소수면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper).handle(earnCommandWithAmount(10.5))
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.earnCalls.isEmpty())
+    }
+
+    @Test
+    fun `EARN amount가 상한을 초과하면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper)
+            .handle(earnCommandWithAmount(PointsCommandHandler.MAX_POINTS_AMOUNT + 1))
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.earnCalls.isEmpty())
+    }
+
+    @Test
+    fun `EARN userEmail이 공백이면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper).handle(
+            body(mapOf("sagaId" to "s", "type" to "EARN", "stepName" to "T3_POINTS",
+                "payload" to mapOf("userEmail" to "   ", "amount" to 100))),
+        )
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.earnCalls.isEmpty())
+    }
+
+    @Test
+    fun `CANCEL amount가 음수면 NACK_DLQ`() {
+        val port = FakePointPort()
+        val pub = CapturingPublisher()
+        val decision = PointsCommandHandler(port, pub, mapper).handle(
+            body(mapOf("sagaId" to "saga-1", "type" to "CANCEL", "stepName" to "T3_POINTS",
+                "payload" to mapOf("userEmail" to "user@test.com", "amount" to -100))),
+        )
+        assertEquals(AckDecision.NACK_DLQ, decision)
+        assertTrue(port.cancelCalls.isEmpty())
     }
 }

@@ -78,4 +78,33 @@ class PointServiceTest @Autowired constructor(
         assertEquals(0, txRepo.count())
         assertEquals(false, balanceRepo.findById("ghost@test.com").isPresent)
     }
+
+    @Test
+    fun `적립되지 않은 saga의 취소는 기존 잔액을 건드리지 않는다`() {
+        // 다른 saga로 잔액 200 확보
+        pointService.earn("saga-earned", "T3_POINTS", "user@test.com", 200)
+
+        // EARN 이력이 없는 다른 saga의 취소가 도착
+        pointService.cancel("saga-no-earn", "T3_POINTS", "user@test.com", 100)
+
+        assertEquals(200, balanceRepo.findById("user@test.com").get().balance) // 잔액 불변
+        assertEquals(1, txRepo.count()) // CANCEL 미기록(EARN 1건만)
+    }
+
+    @Test
+    fun `EARN 금액과 다른 금액의 취소는 no-op이다`() {
+        pointService.earn("saga-1", "T3_POINTS", "user@test.com", 100)
+
+        pointService.cancel("saga-1", "T3_POINTS", "user@test.com", 50) // 금액 불일치
+
+        assertEquals(100, balanceRepo.findById("user@test.com").get().balance) // 불변
+        assertEquals(1, txRepo.count()) // CANCEL 미기록
+    }
+
+    @Test
+    fun `0 이하 금액 적립은 IllegalArgumentException`() {
+        assertFailsWith<IllegalArgumentException> {
+            pointService.earn("saga-1", "T3_POINTS", "user@test.com", 0)
+        }
+    }
 }

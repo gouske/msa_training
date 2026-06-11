@@ -9,6 +9,7 @@ import java.time.LocalDateTime
  *
  * 멱등 전략:
  *   - point_transactions.idempotency_key(UNIQUE)에 이미 같은 키가 있으면 부수효과 없이 종료.
+ *   - CANCEL 은 같은 saga 의 EARN 원장이 있고 userEmail/amount 가 일치할 때만 보상한다(stale/out-of-order 방어).
  *   - 동시성(같은 명령 병렬 수신) 강화(CAS/단계별 idempotency)는 Phase 4 로 이연(설계 §14 L3).
  */
 @Service
@@ -19,6 +20,7 @@ class PointService(
 
     @Transactional
     override fun earn(sagaId: String, stepName: String, userEmail: String, amount: Long): Long {
+        require(amount > 0) { "적립 금액은 양수여야 합니다: $amount" }
         val idemKey = earnKey(sagaId, stepName)
 
         // 멱등: 이미 처리한 명령이면 부수효과 없이 현재 잔액을 반환한다.
@@ -51,12 +53,19 @@ class PointService(
 
     @Transactional
     override fun cancel(sagaId: String, stepName: String, userEmail: String, amount: Long) {
-        val idemKey = cancelKey(sagaId, stepName)
+        require(amount > 0) { "취소 금액은 양수여야 합니다: $amount" }
+        val cancelIdem = cancelKey(sagaId, stepName)
 
         // 멱등: 이미 취소한 명령이면 아무것도 하지 않는다.
-        if (txRepo.findByIdempotencyKey(idemKey) != null) return
+        if (txRepo.findByIdempotencyKey(cancelIdem) != null) return
 
-        // 적립 이력(잔액 계정)이 없으면 보상할 게 없다 → 안전한 no-op.
+        // 보상 대상 EARN 원장이 실제로 있어야만 취소한다(stale/out-of-order/무관 CANCEL 방어).
+        // 없으면 보상할 적립이 없으므로 원장·잔액 모두 건드리지 않는다.
+        val earnTx = txRepo.findByIdempotencyKey(earnKey(sagaId, stepName)) ?: return
+
+        // EARN 원장과 userEmail/amount 가 일치하지 않으면 보상하지 않는다(잘못된 차감 방지).
+        if (earnTx.userEmail != userEmail || earnTx.amount != amount) return
+
         val balance = balanceRepo.findById(userEmail).orElse(null) ?: return
 
         // 의미적 취소: 적립분을 차감(음수 방지).
@@ -68,7 +77,7 @@ class PointService(
                 userEmail = userEmail,
                 amount = amount,
                 type = PointTransactionType.CANCEL,
-                idempotencyKey = idemKey,
+                idempotencyKey = cancelIdem,
             ),
         )
     }

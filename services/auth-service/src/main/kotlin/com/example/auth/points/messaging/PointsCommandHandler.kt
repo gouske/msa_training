@@ -24,8 +24,32 @@ class PointsCommandHandler(
 ) {
     private val log = LoggerFactory.getLogger(PointsCommandHandler::class.java)
 
+    companion object {
+        /** 단일 명령당 포인트 상한 — 원장 오버플로/남용을 막는 sanity bound. */
+        const val MAX_POINTS_AMOUNT = 10_000_000L
+    }
+
     /** 필수 필드 누락 등 재처리 불가한 메시지를 표시하는 내부 예외. */
     private class MalformedCommandException(message: String) : RuntimeException(message)
+
+    /**
+     * payload 에서 userEmail/amount 를 꺼내며 서비스 경계에서 무결성을 검증한다.
+     * 위반(공백 이메일/정수 아님/0 이하/상한 초과/누락)은 malformed → DLQ 로 격리한다(F2).
+     */
+    private fun extractUserEmailAndAmount(payload: Map<String, Any?>): Pair<String, Long> {
+        val userEmail = (payload["userEmail"] as? String)?.takeIf { it.isNotBlank() }
+            ?: throw MalformedCommandException("payload.userEmail 누락/공백")
+        val amountNumber = payload["amount"] as? Number
+            ?: throw MalformedCommandException("payload.amount 누락")
+        val amount = amountNumber.toLong()
+        // 소수/비정수 거부 (예: 10.5 가 toLong() 으로 10 으로 절단되는 것 방지)
+        if (amountNumber.toDouble() != amount.toDouble()) {
+            throw MalformedCommandException("payload.amount 가 정수가 아님: $amountNumber")
+        }
+        if (amount <= 0) throw MalformedCommandException("payload.amount 가 양수가 아님: $amount")
+        if (amount > MAX_POINTS_AMOUNT) throw MalformedCommandException("payload.amount 가 상한 초과: $amount")
+        return userEmail to amount
+    }
 
     fun handle(body: ByteArray): AckDecision {
         // 1단계: 파싱 + sagaId/type 필수 검증. 실패 시 재처리해도 동일 → DLQ 격리.
@@ -58,20 +82,14 @@ class PointsCommandHandler(
         try {
             when (type) {
                 MSG.EARN -> {
-                    val userEmail = payload["userEmail"] as? String
-                        ?: throw MalformedCommandException("payload.userEmail 누락")
-                    val amount = (payload["amount"] as? Number)?.toLong()
-                        ?: throw MalformedCommandException("payload.amount 누락")
+                    val (userEmail, amount) = extractUserEmailAndAmount(payload)
                     val balance = pointPort.earn(sagaId, stepName, userEmail, amount)
                     log.info("✨ 포인트 적립 sagaId={} balance={} correlationId={}", sagaId, balance, correlationId)
                     reply(MSG.POINTS_SUCCEEDED, mapOf("balance" to balance))
                 }
 
                 MSG.CANCEL -> {
-                    val userEmail = payload["userEmail"] as? String
-                        ?: throw MalformedCommandException("payload.userEmail 누락")
-                    val amount = (payload["amount"] as? Number)?.toLong()
-                        ?: throw MalformedCommandException("payload.amount 누락")
+                    val (userEmail, amount) = extractUserEmailAndAmount(payload)
                     pointPort.cancel(sagaId, stepName, userEmail, amount)
                     log.info("↩️ 포인트 취소(보상) sagaId={}", sagaId)
                     // CANCEL 은 Orchestrator 에 소비자가 없어 reply 를 보내지 않고 ACK 만 한다(의도적 비대칭).
