@@ -19,6 +19,11 @@ spring:
       hibernate:
         format_sql: true
 
+  # [제25강 Saga Phase 3] RabbitMQ 연결. payment-service와 동일하게 RABBITMQ_HOST 환경변수 사용.
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+
 # 왼쪽 끝에 딱 붙여서 시작
 jwt:
   # ${이름:기본값}은 "이 이름의 환경변수가 있으면 쓰고, 없으면 기본값을 써"라는 뜻입니다.
@@ -75,3 +80,10 @@ logging:
     org.hibernate.SQL: debug
     org.hibernate.type.descriptor.sql.BasicBinder: trace
     org.springframework.orm.jpa: debug
+
+# [제25강 Saga Phase 3] 포인트 Saga participant 메시징 토글.
+#   true(기본): saga.points.command consumer + reply publisher 활성.
+#   테스트 프로파일에서는 false 로 꺼서 RabbitMQ 미가동 환경에서도 컨텍스트가 뜬다(Consul 패턴과 동일).
+saga:
+  messaging:
+    enabled: ${SAGA_MESSAGING_ENABLED:true}

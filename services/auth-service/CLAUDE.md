@@ -74,3 +74,23 @@ src/main/kotlin/com/example/auth/
 ├── domain/User.kt                     # JPA 엔티티
 └── domain/UserRepository.kt           # DB 접근
 ```
+
+## 포인트 Saga participant (제25강 Phase 3)
+
+order-service(Orchestrator)의 `saga.points.command`(EARN/CANCEL)를 소비해 포인트를 적립/취소하고
+`saga.reply`로 결과를 발행한다(Spring AMQP, 수동 ACK).
+
+- `points/domain/` — `PointBalance`(user_email PK, balance, status, updated_at) · `PointTransaction`(idempotency_key UNIQUE) · `PointService`(멱등 earn/cancel, SUSPENDED 계정은 `PointsDeclinedError`)
+- `points/messaging/` — `PointsContracts`(order/payment 계약 미러) · `CorrelationId`(정규화) · `PointsCommandHandler`(오류 3종 분류) · `SagaPointsListener`(ChannelAwareMessageListener, 수동 ACK) · `RabbitSagaReplyPublisher` · `SagaMessagingConfig`
+- 정지 계정 시드(데모): `INSERT INTO point_balance(user_email,balance,status,updated_at) VALUES ('x',0,'SUSPENDED',now())`
+
+> 멱등키: EARN=`sagaId:stepName`, CANCEL=`sagaId:stepName:CANCEL`. 오류 분류: malformed→DLQ / 인프라→재시도 / 비즈니스 거절→POINTS_FAILED+ACK.
+> CANCEL은 Orchestrator에 소비자가 없어 reply 없이 ACK. 동시 consumer race·타임아웃·outbox는 Phase 4 이연.
+
+## 환경 변수
+
+| 변수 | 로컬 기본값 | Docker 값 |
+|------|------------|-----------|
+| `RABBITMQ_HOST` | `localhost` | `rabbitmq` (Saga 포인트 participant) |
+| `RABBITMQ_PORT` | `5672` | `5672` |
+| `SAGA_MESSAGING_ENABLED` | `true` | `true` (테스트 프로파일은 `false`) |

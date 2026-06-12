@@ -50,6 +50,10 @@ dependencies {
     // implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
+    // [제25강 Saga Phase 3] RabbitMQ(Spring AMQP) — saga.points.command consumer + saga.reply publisher.
+    //   order-service(amqplib)·payment-service(pika)와 동일한 큐/DLQ 계약으로 통신한다.
+    implementation("org.springframework.boot:spring-boot-starter-amqp")
+
     compileOnly("org.projectlombok:lombok")
     runtimeOnly("org.postgresql:postgresql")
     annotationProcessor("org.projectlombok:lombok")
@@ -80,6 +84,9 @@ dependencies {
     // Mockito: 가짜(Mock) 객체를 만들어 단위 테스트에서 외부 의존성을 격리합니다.
     testImplementation("org.mockito:mockito-core:5.14.2")
     testImplementation("org.mockito:mockito-junit-jupiter:5.14.2")
+
+    // [제25강 Saga Phase 3] Kotlin 친화 Mockito DSL — final 클래스 mock(Mockito 5 inline) + whenever/verify.
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
 
     // MockWebServer: Consul HTTP API를 모의(mock)해서 단위 테스트에서 실제 Consul 없이도 검증합니다.
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
