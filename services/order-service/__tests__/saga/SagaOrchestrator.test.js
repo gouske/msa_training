@@ -180,6 +180,17 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
             expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
         });
+
+        test('이미 COMPLETED 인 saga 에 REFUND_SUCCEEDED 가 와도 재고/주문을 건드리지 않는다 (지연·중복·오라우팅 reply 방어 — Codex high)', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(chargedSaga({ state: SagaState.COMPLETED }));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_SUCCEEDED, stepName: STEP.PAYMENT });
+
+            // 보상 상태가 아니므로 어떤 부수효과도 일어나면 안 된다(재고 부풀림/성공주문 FAILED 오염 방지)
+            expect(mockInventoryRepo.release).not.toHaveBeenCalled();
+            expect(mockOrderRepo.updateStatus).not.toHaveBeenCalled();
+            expect(mockSagaRepo.compareAndAdvance).not.toHaveBeenCalled();
+        });
     });
 
     describe('handleReply() — 포인트 비활성(POINTS_ENABLED=false)', () => {

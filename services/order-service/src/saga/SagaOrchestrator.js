@@ -159,10 +159,16 @@ class SagaOrchestrator {
         // 재고 복원은 환불 성공(REFUND_SUCCEEDED) reply 에서 수행한다.
     }
 
-    /** 환불 성공: COMPENSATING 중 결제 보상 완료 → 재고 복원(C1) → FAILED */
+    /** 환불 성공: COMPENSATING 중일 때만 재고 복원(C1) → FAILED. 잘못된/지연/중복 reply 는 무시. */
     async _onRefundSucceeded(saga) {
+        // 진입 가드 [Codex high] — 보상 중(COMPENSATING)이 아니면 부수효과를 절대 수행하지 않는다.
+        // 이미 COMPLETED/FAILED 인 saga 에 지연·중복·오라우팅된 REFUND_SUCCEEDED 가 와도
+        // release/updateStatus 가 실행돼 성공 주문이 FAILED 로 오염되거나 재고가 부풀려지는 것을 막는다.
+        // (COMPENSATING → COMPLETED 전이는 상태머신에 없으므로, COMPENSATING 이면 release 가 항상 정당하다.)
+        if (saga.state !== SagaState.COMPENSATING) return;
+
         const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
-        // release 는 멱등(releasedSagas)이라 종결 CAS 전에 안전하게 실행 — 크래시해도 누수 없음.
+        // release 는 멱등(releasedSagas)이라 종결 CAS 전에 안전하게 실행 — 크래시 시 COMPENSATING 잔류로 복구 가능.
         await this._inventoryRepo.release(inv.itemId, inv.quantity, saga.sagaId);
         await this._orderRepo.updateStatus(saga.orderId, 'FAILED');
         await this._sagaRepo.compareAndAdvance(saga.sagaId, {
