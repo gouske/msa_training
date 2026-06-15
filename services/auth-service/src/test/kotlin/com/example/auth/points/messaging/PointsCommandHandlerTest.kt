@@ -4,6 +4,7 @@ import com.example.auth.points.domain.PointPort
 import com.example.auth.points.domain.PointsDeclinedError
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Test
+import org.springframework.dao.DataIntegrityViolationException
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -20,6 +21,7 @@ class PointsCommandHandlerTest {
     /** 호출 인자/오류를 기록하는 fake 포트. */
     private class FakePointPort : PointPort {
         var earnError: RuntimeException? = null
+        var cancelError: RuntimeException? = null
         val earnCalls = mutableListOf<List<Any>>()
         val cancelCalls = mutableListOf<List<Any>>()
         override fun earn(sagaId: String, stepName: String, userEmail: String, amount: Long): Long {
@@ -29,6 +31,7 @@ class PointsCommandHandlerTest {
         }
         override fun cancel(sagaId: String, stepName: String, userEmail: String, amount: Long) {
             cancelCalls.add(listOf(sagaId, stepName, userEmail, amount))
+            cancelError?.let { throw it }
         }
     }
 
@@ -225,5 +228,33 @@ class PointsCommandHandlerTest {
         )
         assertEquals(AckDecision.NACK_DLQ, decision)
         assertTrue(port.cancelCalls.isEmpty())
+    }
+
+    @Test
+    fun `EARN 중복(UNIQUE 위반)이면 멱등 성공으로 POINTS_SUCCEEDED reply 후 ACK`() {
+        val port = FakePointPort().apply { earnError = DataIntegrityViolationException("duplicate key") }
+        val pub = CapturingPublisher()
+        val handler = PointsCommandHandler(port, pub, mapper)
+
+        val decision = handler.handle(earnCommand())
+
+        assertEquals(AckDecision.ACK, decision) // 재시도 루프(NACK_REQUEUE) 아님
+        assertEquals(1, pub.replies.size)
+        assertEquals("POINTS_SUCCEEDED", pub.replies[0].type)
+    }
+
+    @Test
+    fun `CANCEL 중복(UNIQUE 위반)이면 reply 없이 ACK`() {
+        val port = FakePointPort().apply { cancelError = DataIntegrityViolationException("duplicate key") }
+        val pub = CapturingPublisher()
+        val handler = PointsCommandHandler(port, pub, mapper)
+
+        val decision = handler.handle(
+            body(mapOf("sagaId" to "saga-1", "type" to "CANCEL", "stepName" to "T3_POINTS",
+                "payload" to mapOf("userEmail" to "user@test.com", "amount" to 100))),
+        )
+
+        assertEquals(AckDecision.ACK, decision)
+        assertTrue(pub.replies.isEmpty()) // CANCEL 은 reply 없음(비대칭 유지)
     }
 }

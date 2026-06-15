@@ -4,6 +4,9 @@ const mongoose = require('mongoose');
 const InventorySchema = new mongoose.Schema({
     itemId:    { type: String, required: true, unique: true },
     available: { type: Number, required: true, min: 0 },
+    // [Phase 4a] sagaId 멱등키 — 같은 saga 의 reserve/release 가 중복돼도 한 번만 반영(L3 복구 안전).
+    reservedSagas: { type: [String], default: [] },
+    releasedSagas: { type: [String], default: [] },
 });
 
 module.exports = mongoose.model('Inventory', InventorySchema);

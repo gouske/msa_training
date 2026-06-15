@@ -34,6 +34,8 @@ const { SagaOrchestrator } = require('./src/saga/SagaOrchestrator');
 const { RabbitMQConnection } = require('./src/infrastructure/messaging/RabbitMQConnection');
 const { SagaCommandPublisher } = require('./src/infrastructure/messaging/SagaCommandPublisher');
 const { SagaReplyConsumer } = require('./src/infrastructure/messaging/SagaReplyConsumer');
+const { OutboxRelayWorker } = require('./src/infrastructure/messaging/OutboxRelayWorker');
+const { OUTBOX_RELAY_INTERVAL_MS } = require('./src/saga/sagaConfig');
 
 const PORT = 8081;
 
@@ -71,16 +73,22 @@ const commandPublisher = new SagaCommandPublisher(() => rabbit.getChannel());
 // 그 전까지는 결제 성공 시 포인트를 건너뛰고 주문을 완료한다(환경변수 미설정 시 비활성).
 const POINTS_ENABLED = process.env.POINTS_ENABLED === 'true';
 
+// [Phase 4a] Orchestrator 는 더 이상 직접 발행하지 않는다 — 발행 의도를 outbox 에 적재한다.
 const sagaOrchestrator = new SagaOrchestrator({
     orderRepository,
     inventoryRepository,
     sagaRepository,
-    commandPublisher,
     pointsEnabled: POINTS_ENABLED,
 });
 const sagaReplyConsumer = new SagaReplyConsumer({
     channelProvider: () => rabbit.getChannel(),
     orchestrator: sagaOrchestrator,
+});
+// [Phase 4a] outbox 릴레이 워커 — saga 에 적재된 PENDING command 를 실제 발행한다.
+const outboxRelayWorker = new OutboxRelayWorker({
+    sagaRepository,
+    commandPublisher,
+    intervalMs: OUTBOX_RELAY_INTERVAL_MS,
 });
 
 // 4-b. 라우터: 서비스 + orchestrator(Saga) + 내부 키 주입
@@ -146,6 +154,9 @@ function startHttpServer() {
         sagaReplyConsumer.start().catch((err) => {
             console.warn('⚠️ saga.reply consumer 시작 실패(재시도 대상):', err.message);
         });
+
+        // [Phase 4a] outbox 릴레이 시작 — RabbitMQ 미준비 시에도 다음 주기에 자동 재시도한다.
+        outboxRelayWorker.start();
 
         // [실전 #6 + K8s 회고] Consul 자기 등록.
         //

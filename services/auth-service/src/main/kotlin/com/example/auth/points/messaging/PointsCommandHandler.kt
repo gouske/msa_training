@@ -6,6 +6,7 @@ import com.example.auth.points.messaging.PointsContracts.MSG
 import com.example.auth.points.messaging.PointsContracts.STEP
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 
 /**
  * saga.points.command 처리 핵심 로직 — payment-service saga_consumer.handle_command 미러.
@@ -103,6 +104,18 @@ class PointsCommandHandler(
         } catch (e: PointsDeclinedError) {
             log.info("🚫 포인트 거절 sagaId={}: {}", sagaId, e.message)
             reply(MSG.POINTS_FAILED, mapOf("reason" to (e.message ?: "거절")))
+        } catch (e: DataIntegrityViolationException) {
+            // 중복 명령(at-least-once outbox 재발행) — 다른 트랜잭션이 이미 같은 idempotency_key 로 처리.
+            // 충돌 트랜잭션은 롤백됐으므로 멱등 성공으로 간주한다(재시도 루프 방지).
+            //
+            // 가정/한계: 현재 auth 는 단일 인스턴스 + 리스너 concurrency=1(순차 처리)이라
+            //   point_transactions.idempotency_key UNIQUE 충돌만 이 경로로 들어온다(순차라 사실상 드묾).
+            //   향후 멀티 consumer 로 확장하면 "동시 신규 사용자 EARN"의 point_balance PK 충돌도
+            //   같은 예외가 되어 잘못된 멱등 성공으로 적립이 누락될 수 있다 → 그때는 point_balance
+            //   생성을 원자적 upsert 로 바꿔 PK 충돌 자체를 없애는 것이 정석(설계 §17.7 알려진 한계).
+            log.info("♻️ 중복 명령(멱등 성공) sagaId={} type={}", sagaId, type)
+            if (type == MSG.EARN) reply(MSG.POINTS_SUCCEEDED, mapOf("idempotent" to true))
+            // CANCEL 은 reply 없이 ACK (기존 비대칭 유지)
         } catch (e: Exception) {
             // 인프라 장애(DB/네트워크 등) — 일시적일 수 있으므로 재시도. reply 는 보내지 않는다.
             log.error("🚨 인프라 오류 — 재시도 sagaId={}: {}", sagaId, e.message)
