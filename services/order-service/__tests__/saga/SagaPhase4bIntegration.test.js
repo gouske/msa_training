@@ -31,6 +31,7 @@ describe('Saga Phase 4b 통합 시나리오', () => {
 
     beforeAll(mem.connect);
     afterEach(mem.clear);
+    afterEach(() => { jest.restoreAllMocks(); });
     afterAll(mem.close);
 
     beforeEach(async () => {
@@ -86,7 +87,6 @@ describe('Saga Phase 4b 통합 시나리오', () => {
 
         const saga = await sagaRepo.findBySagaId('s1');
         expect(saga.state).toBe(SagaState.COMPENSATION_FAILED);
-        console.error.mockRestore();
     });
 
     test('③ 크래시 후 복구 — STARTED 정지-전진 재구동', async () => {
@@ -133,7 +133,7 @@ describe('Saga Phase 4b 통합 시나리오', () => {
         expect(publisher.sent.map((m) => m.message.type)).toEqual([MSG.CHARGE, MSG.EARN]);
     });
 
-    test('④ 보상 path 회귀 — 포인트 실패 → 환불 → FAILED', async () => {
+    test('⑤ 보상 path 회귀 — 포인트 실패 → 환불 → FAILED', async () => {
         const orchestrator = makeOrchestrator();
         const publisher = makeFakePublisher();
         const relay = new OutboxRelayWorker({ sagaRepository: sagaRepo, commandPublisher: publisher, stepTimeoutMs: 15000, now: () => NOW });
@@ -153,7 +153,7 @@ describe('Saga Phase 4b 통합 시나리오', () => {
         expect(publisher.sent.map((m) => m.message.type)).toEqual([MSG.CHARGE, MSG.EARN, MSG.REFUND]);
     });
 
-    test('⑤ 동시 REFUND_FAILED + 스윕 → REFUND 단 1건만 재적재', async () => {
+    test('⑥ 동시 REFUND_FAILED + 스윕 → REFUND 단 1건만 재적재', async () => {
         await sagaRepo.save({
             sagaId: 's1', orderId: 'order-1', state: SagaState.COMPENSATING, currentStep: STEP.PAYMENT, deadline: PAST,
             steps: [
