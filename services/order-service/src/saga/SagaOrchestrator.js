@@ -15,23 +15,30 @@ const OrderItem = require('../domain/OrderItem');
 const Money = require('../domain/Money');
 const { SagaState } = require('./SagaState');
 const { QUEUE, MSG, STEP } = require('./sagaContracts');
+const { STEP_TIMEOUT_MS, MAX_COMPENSATE_ATTEMPTS } = require('./sagaConfig');
 
 class SagaOrchestrator {
     /**
      * @param {object} deps
      * @param {{save:Function, updateStatus:Function}} deps.orderRepository
      * @param {{reserve:Function, release:Function}} deps.inventoryRepository
-     * @param {{save:Function, findBySagaId:Function, compareAndAdvance:Function}} deps.sagaRepository
+     * @param {{save:Function, findBySagaId:Function, compareAndAdvance:Function, retryCompensation:Function}} deps.sagaRepository
      * @param {boolean} [deps.pointsEnabled=true]
+     * @param {() => Date} [deps.now] 테스트 주입용 시계
+     * @param {number} [deps.stepTimeoutMs] STARTED T1 deadline 계산용(정지-전진 감지)
+     * @param {number} [deps.maxCompensateAttempts] 보상 재시도 상한
      */
-    constructor({ orderRepository, inventoryRepository, sagaRepository, pointsEnabled = true }) {
+    constructor({ orderRepository, inventoryRepository, sagaRepository, pointsEnabled = true, now = () => new Date(), stepTimeoutMs = STEP_TIMEOUT_MS, maxCompensateAttempts = MAX_COMPENSATE_ATTEMPTS }) {
         this._orderRepo = orderRepository;
         this._inventoryRepo = inventoryRepository;
         this._sagaRepo = sagaRepository;
         this._pointsEnabled = pointsEnabled;
+        this._now = now;
+        this._stepTimeoutMs = stepTimeoutMs;
+        this._maxCompensateAttempts = maxCompensateAttempts;
     }
 
-    /** 주문 시작: 주문 저장 → Saga 생성 → 재고 예약(멱등) → INVENTORY_RESERVED + CHARGE outbox 적재 */
+    /** 주문 시작: 주문 저장 → Saga 생성(STARTED + T1 deadline) → 재고 예약(멱등) → INVENTORY_RESERVED + CHARGE outbox */
     async startOrder({ userEmail, itemId, quantity, price, correlationId = '' }) {
         const item = new OrderItem(itemId, new Money(price), quantity);
         const order = Order.create(userEmail, item);
@@ -39,9 +46,10 @@ class SagaOrchestrator {
         const amount = order.totalAmount().amount;
         const sagaId = randomUUID();
 
-        // Saga 생성 (STARTED). CHARGE 는 재고 예약 성공 후 INVENTORY_RESERVED 전이와 함께 원자 적재한다.
+        // Saga 생성 (STARTED). T1 deadline 을 무장해 reserve↔advance 갭 크래시(정지-전진)를 스윕이 감지하게 한다.
         const saga = {
             sagaId, orderId, state: SagaState.STARTED, currentStep: STEP.INVENTORY, correlationId,
+            deadline: new Date(this._now().getTime() + this._stepTimeoutMs),
             steps: [
                 { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId, quantity } },
                 { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId, amount } },
@@ -51,7 +59,20 @@ class SagaOrchestrator {
         };
         await this._sagaRepo.save(saga);
 
-        // T1 재고 예약 (멱등키)
+        return this._reserveAndAdvance(saga);
+    }
+
+    /**
+     * 재고 예약(멱등) → INVENTORY_RESERVED 전이 + CHARGE outbox 적재. 재고 진짜 부족이면 FAILED.
+     * startOrder 와 타임아웃 스윕의 STARTED 정지-전진 재구동이 공유한다(DRY). saga 는 STARTED 상태의 평범한 객체.
+     */
+    async _reserveAndAdvance(saga) {
+        const { sagaId, orderId } = saga;
+        const invStep = saga.steps.find((s) => s.name === STEP.INVENTORY);
+        const { itemId, quantity } = invStep.payload;
+        const amount = saga.steps.find((s) => s.name === STEP.PAYMENT).payload.amount;
+        const correlationId = saga.correlationId || '';
+
         const reserved = await this._inventoryRepo.reserve(itemId, quantity, sagaId);
         if (!reserved) {
             await this._sagaRepo.compareAndAdvance(sagaId, {
@@ -62,7 +83,6 @@ class SagaOrchestrator {
             return { orderId, sagaId, status: 'FAILED' };
         }
 
-        // 재고 예약 성공 → INVENTORY_RESERVED + CHARGE command outbox 적재(원자적)
         await this._sagaRepo.compareAndAdvance(sagaId, {
             from: SagaState.STARTED, to: SagaState.INVENTORY_RESERVED, currentStep: STEP.PAYMENT,
             steps: [{ name: STEP.INVENTORY, status: 'DONE' }],

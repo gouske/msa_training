@@ -62,6 +62,22 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-2', 'FAILED');
             expect(result.status).toBe('FAILED');
         });
+
+        test('STARTED saga 저장 시 top-level deadline 을 now+stepTimeoutMs 로 무장한다(정지-전진 감지)', async () => {
+            mockOrderRepo.save.mockResolvedValue('order-3');
+            mockInventoryRepo.reserve.mockResolvedValue(true);
+            const FIXED_NOW = new Date('2026-06-17T12:00:00.000Z');
+            const o = new SagaOrchestrator({
+                orderRepository: mockOrderRepo, inventoryRepository: mockInventoryRepo,
+                sagaRepository: mockSagaRepo, now: () => FIXED_NOW, stepTimeoutMs: 15000,
+            });
+
+            await o.startOrder({ userEmail: 'b@test.com', itemId: 'ITEM-1', quantity: 1, price: 1000 });
+
+            const savedSaga = mockSagaRepo.save.mock.calls[0][0];
+            expect(savedSaga.state).toBe(SagaState.STARTED);
+            expect(savedSaga.deadline).toEqual(new Date(FIXED_NOW.getTime() + 15000));
+        });
     });
 
     const sagaFixture = (overrides = {}) => ({
