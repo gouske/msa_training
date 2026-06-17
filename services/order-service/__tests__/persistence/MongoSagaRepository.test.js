@@ -171,3 +171,34 @@ describe('MongoSagaRepository — deadline 필드 라운드트립 (Phase 4b)', (
         expect(saga.deadline).toEqual(deadline);
     });
 });
+
+describe('MongoSagaRepository — findTimedOut (Phase 4b 스윕 질의)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    const now = new Date('2026-06-17T12:00:00.000Z');
+    const past = new Date('2026-06-17T11:00:00.000Z');
+    const future = new Date('2026-06-17T13:00:00.000Z');
+
+    test('활성 상태 + deadline 과거인 saga 만 반환한다', async () => {
+        await repo.save({ sagaId: 'a', orderId: 'o', state: 'INVENTORY_RESERVED', deadline: past, steps: [], outbox: [] });   // 대상
+        await repo.save({ sagaId: 'b', orderId: 'o', state: 'PAYMENT_CHARGED', deadline: future, steps: [], outbox: [] });   // deadline 미도래
+        await repo.save({ sagaId: 'c', orderId: 'o', state: 'COMPLETED', deadline: past, steps: [], outbox: [] });           // 종결 상태
+        await repo.save({ sagaId: 'd', orderId: 'o', state: 'INVENTORY_RESERVED', deadline: null, steps: [], outbox: [] });  // deadline 없음(대기 아님)
+
+        const timedOut = await repo.findTimedOut(now, 20);
+
+        expect(timedOut.map((s) => s.sagaId).sort()).toEqual(['a']);
+    });
+
+    test('COMPENSATING + deadline 과거도 반환한다(보상 재시도 대상)', async () => {
+        await repo.save({ sagaId: 'comp', orderId: 'o', state: 'COMPENSATING', deadline: past, steps: [], outbox: [] });
+
+        const timedOut = await repo.findTimedOut(now, 20);
+
+        expect(timedOut.map((s) => s.sagaId)).toEqual(['comp']);
+    });
+});

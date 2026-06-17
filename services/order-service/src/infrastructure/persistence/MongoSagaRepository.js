@@ -9,6 +9,15 @@
  */
 const { randomUUID } = require('crypto');
 const SagaModel = require('../../../models/Saga');
+const { SagaState } = require('../../saga/SagaState');
+
+// [Phase 4b] 타임아웃 스윕 대상이 되는 "활성"(비종결) 상태들.
+const ACTIVE_STATES = [
+    SagaState.STARTED,
+    SagaState.INVENTORY_RESERVED,
+    SagaState.PAYMENT_CHARGED,
+    SagaState.COMPENSATING,
+];
 
 class MongoSagaRepository {
     /**
@@ -91,6 +100,21 @@ class MongoSagaRepository {
      */
     async findWithPendingOutbox(limit = 20) {
         return SagaModel.find({ 'outbox.status': 'PENDING' }).limit(limit).lean();
+    }
+
+    /**
+     * [Phase 4b] 활성 상태이면서 deadline 이 지난(reply 미수신/정지) saga 들을 조회한다(스윕 워커용).
+     * `{ deadline: { $lt: now } }` 는 타입 브래킷팅으로 null/미설정을 매칭하지 않으므로,
+     * deadline 이 비워진(대기 중 아님) saga 는 자동 제외된다.
+     * @param {Date} now 현재 시각
+     * @param {number} limit 최대 조회 개수
+     * @returns {Promise<Array<object>>}
+     */
+    async findTimedOut(now, limit = 20) {
+        return SagaModel.find({
+            state: { $in: ACTIVE_STATES },
+            deadline: { $lt: now },
+        }).limit(limit).lean();
     }
 
     /**
