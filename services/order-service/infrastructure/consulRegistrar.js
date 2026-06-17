@@ -70,11 +70,18 @@ async function deregister(consulUrl, serviceId) {
 
 /**
  * SIGTERM 핸들러를 등록한다. Docker가 컨테이너 종료 시 SIGTERM을 보내면
- * Consul에서 먼저 자기를 빼고 → process.exit(0).
+ * 워커 정리 → Consul 해제 → 종료.
+ *
+ * @param {string} consulUrl - Consul URL
+ * @param {string} serviceId - Service ID
+ * @param {() => void} [onShutdown] - [Phase 4b] SIGTERM 수신 시 먼저 호출할 정리 콜백(타이머/구독 취소)
  */
-function setupGracefulShutdown(consulUrl, serviceId) {
+function setupGracefulShutdown(consulUrl, serviceId, onShutdown) {
     process.on('SIGTERM', async () => {
-        console.log('SIGTERM 수신 — Consul 해제 시작');
+        console.log('SIGTERM 수신 — graceful shutdown 시작');
+        // [Phase 4b] 워커(릴레이/스윕/리플라이) 타이머·구독을 먼저 정리한다.
+        try { if (typeof onShutdown === 'function') onShutdown(); }
+        catch (e) { console.warn('shutdown 정리 중 오류(무시):', e.message); }
         await deregister(consulUrl, serviceId);
         process.exit(0);
     });

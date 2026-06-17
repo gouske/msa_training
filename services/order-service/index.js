@@ -35,7 +35,8 @@ const { RabbitMQConnection } = require('./src/infrastructure/messaging/RabbitMQC
 const { SagaCommandPublisher } = require('./src/infrastructure/messaging/SagaCommandPublisher');
 const { SagaReplyConsumer } = require('./src/infrastructure/messaging/SagaReplyConsumer');
 const { OutboxRelayWorker } = require('./src/infrastructure/messaging/OutboxRelayWorker');
-const { OUTBOX_RELAY_INTERVAL_MS } = require('./src/saga/sagaConfig');
+const { TimeoutSweepWorker } = require('./src/infrastructure/messaging/TimeoutSweepWorker');
+const { OUTBOX_RELAY_INTERVAL_MS, TIMEOUT_SWEEP_INTERVAL_MS, STEP_TIMEOUT_MS, MAX_COMPENSATE_ATTEMPTS, MAX_OUTBOX_ATTEMPTS } = require('./src/saga/sagaConfig');
 
 const PORT = 8081;
 
@@ -79,6 +80,8 @@ const sagaOrchestrator = new SagaOrchestrator({
     inventoryRepository,
     sagaRepository,
     pointsEnabled: POINTS_ENABLED,
+    stepTimeoutMs: STEP_TIMEOUT_MS,
+    maxCompensateAttempts: MAX_COMPENSATE_ATTEMPTS,
 });
 const sagaReplyConsumer = new SagaReplyConsumer({
     channelProvider: () => rabbit.getChannel(),
@@ -89,6 +92,14 @@ const outboxRelayWorker = new OutboxRelayWorker({
     sagaRepository,
     commandPublisher,
     intervalMs: OUTBOX_RELAY_INTERVAL_MS,
+    stepTimeoutMs: STEP_TIMEOUT_MS,
+    maxOutboxAttempts: MAX_OUTBOX_ATTEMPTS,
+});
+// [Phase 4b] 타임아웃 스윕 워커 — deadline 초과 saga 를 발견해 보상/재구동을 구동한다.
+const timeoutSweepWorker = new TimeoutSweepWorker({
+    sagaRepository,
+    orchestrator: sagaOrchestrator,
+    intervalMs: TIMEOUT_SWEEP_INTERVAL_MS,
 });
 
 // 4-b. 라우터: 서비스 + orchestrator(Saga) + 내부 키 주입
@@ -158,6 +169,9 @@ function startHttpServer() {
         // [Phase 4a] outbox 릴레이 시작 — RabbitMQ 미준비 시에도 다음 주기에 자동 재시도한다.
         outboxRelayWorker.start();
 
+        // [Phase 4b] 타임아웃 스윕 시작 — reply 무응답/보상 실패로 정지한 saga 를 주기적으로 복구한다.
+        timeoutSweepWorker.start();
+
         // [실전 #6 + K8s 회고] Consul 자기 등록.
         //
         // 주소 우선순위:
@@ -183,7 +197,11 @@ function startHttpServer() {
             healthPath: '/api/order/health',
             instanceKey: myInstanceKey,
         }).then((serviceId) => {
-            setupGracefulShutdown(consulUrl, serviceId);
+            setupGracefulShutdown(consulUrl, serviceId, () => {
+                outboxRelayWorker.stop();
+                timeoutSweepWorker.stop();
+                sagaReplyConsumer.stop();
+            });
         }).catch((err) => {
             console.warn('Consul 등록 실패 (무시):', err.message);
         });

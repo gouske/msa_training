@@ -69,6 +69,11 @@ class SagaReplyConsumer {
         // 타이머가 프로세스 종료를 막지 않도록(Node 환경) — 테스트의 fake timer에는 unref가 없을 수 있다.
         if (typeof this._restartTimer.unref === 'function') this._restartTimer.unref();
     }
+
+    /** 재시작 예약 타이머를 취소한다(graceful shutdown). */
+    stop() {
+        if (this._restartTimer) { clearTimeout(this._restartTimer); this._restartTimer = null; }
+    }
 }
 
 module.exports = { SagaReplyConsumer };
