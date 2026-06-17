@@ -106,6 +106,7 @@ class SagaOrchestrator {
             case MSG.PAYMENT_FAILED:    return this._onPaymentFailed(saga);
             case MSG.POINTS_FAILED:     return this._onPointsFailed(saga);
             case MSG.REFUND_SUCCEEDED:  return this._onRefundSucceeded(saga);
+            case MSG.REFUND_FAILED:     return this._onRefundFailed(saga);
             default: return; // 알 수 없는 타입 — 무시
         }
     }
@@ -212,6 +213,48 @@ class SagaOrchestrator {
                 { name: STEP.PAYMENT,   status: 'COMPENSATED' },
                 { name: STEP.INVENTORY, status: 'COMPENSATED' },
             ],
+        });
+    }
+
+    /** 환불 실패(REFUND_FAILED): 보상 재시도 또는 상한 도달 시 에스컬레이션. 스윕의 COMPENSATING 분기와 공용. */
+    async _onRefundFailed(saga) {
+        return this._retryOrEscalateCompensation(saga);
+    }
+
+    /**
+     * [Phase 4b] COMPENSATING 보상(환불)을 재시도하거나, 상한 도달 시 COMPENSATION_FAILED 로 에스컬레이션.
+     * - 재시도: compensateAttempts 를 CAS 토큰으로 써서 동시 호출(중복 REFUND_FAILED + 스윕)에도 한 번만 재적재.
+     * - 에스컬레이션: 상한 도달 → COMPENSATION_FAILED + 운영자 개입 에러 로그(설계 §17.12.3·§17.12.5 ②).
+     * REFUND_FAILED reply 핸들러와 타임아웃 스윕의 COMPENSATING 분기가 공유한다.
+     */
+    async _retryOrEscalateCompensation(saga) {
+        if (saga.state !== SagaState.COMPENSATING) return; // 보상 중이 아니면 아무 것도 안 함(지연/오라우팅 방어)
+
+        const payStep = saga.steps.find((s) => s.name === STEP.PAYMENT);
+        const attempts = payStep.compensateAttempts || 0;
+        const paymentId = payStep.replyData && payStep.replyData.paymentId;
+
+        if (attempts + 1 >= this._maxCompensateAttempts) {
+            // 더 못 푼다 — 영구 마커(COMPENSATION_FAILED) + 운영자 개입 로그. 승자만 로그(중복 방지).
+            const escalated = await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+                from: SagaState.COMPENSATING, to: SagaState.COMPENSATION_FAILED,
+                steps: [{ name: STEP.PAYMENT, status: 'FAILED' }],
+            });
+            if (escalated) {
+                console.error(`🚨 보상(환불) ${this._maxCompensateAttempts}회 실패 — 운영자 개입 필요 ` +
+                    `sagaId=${saga.sagaId} orderId=${saga.orderId} paymentId=${paymentId} attempts=${attempts + 1}`);
+            }
+            return;
+        }
+
+        // 재시도 — attempts==현재값일 때만 +1 하며 REFUND 재적재(동시 호출 중 하나만 성공).
+        await this._sagaRepo.retryCompensation(saga.sagaId, {
+            stepName: STEP.PAYMENT,
+            expectedAttempts: attempts,
+            outbox: [{
+                queue: QUEUE.PAYMENT_COMMAND,
+                message: { sagaId: saga.sagaId, type: MSG.REFUND, stepName: STEP.PAYMENT, payload: { paymentId, orderId: saga.orderId }, correlationId: saga.correlationId },
+            }],
         });
     }
 }
