@@ -95,19 +95,22 @@ class MongoSagaRepository {
 
     /**
      * outbox 엔트리를 SENT 로 표시한다(PENDING 일 때만 — 동시 릴레이에서 한 번만 성공).
+     * deadline 을 주면 같은 원자 update 로 top-level deadline 도 무장한다([Phase 4b] reply 대기 타이머 시작).
      *
-     * 주의: id 와 status 조건을 같은 배열의 "단일 요소"에 묶어야 한다. dot-notation 으로
-     *   { 'outbox.id': id, 'outbox.status': 'PENDING' } 를 쓰면 두 조건이 서로 다른 요소에
-     *   매칭될 수 있어 positional `$` 가 엉뚱한 엔트리를 SENT 로 만든다(미발행 command 유실).
-     *   $elemMatch 로 한 요소에 두 조건을 묶으면 `$` 가 그 요소를 정확히 지목한다.
+     * 주의: id 와 status 조건을 같은 배열의 "단일 요소"에 묶어야 한다. $elemMatch 로 한 요소에 두 조건을
+     *   묶으면 positional `$` 가 그 요소를 정확히 지목하고, deadline 무장도 SENT 승자에게만 일어난다
+     *   (이미 SENT 인 엔트리엔 top-level 필터가 매칭 안 돼 update 전체가 no-op).
      * @param {string} sagaId
      * @param {string} entryId outbox 엔트리 id
      * @param {Date} now 발행 시도 시각
+     * @param {Date} [deadline] 무장할 reply 대기 마감 시각(없으면 deadline 변경 안 함)
      */
-    async markOutboxSent(sagaId, entryId, now) {
+    async markOutboxSent(sagaId, entryId, now, deadline) {
+        const set = { 'outbox.$.status': 'SENT', 'outbox.$.lastAttemptAt': now };
+        if (deadline) set.deadline = deadline;
         await SagaModel.updateOne(
             { sagaId, outbox: { $elemMatch: { id: entryId, status: 'PENDING' } } },
-            { $set: { 'outbox.$.status': 'SENT', 'outbox.$.lastAttemptAt': now } },
+            { $set: set },
         );
     }
 

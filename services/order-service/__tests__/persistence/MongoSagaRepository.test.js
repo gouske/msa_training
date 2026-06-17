@@ -130,6 +130,30 @@ describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxA
         expect(saga.outbox.find((e) => e.id === 'B').attempts).toBe(1);
         expect(saga.outbox.find((e) => e.id === 'A').attempts).toBe(0);
     });
+
+    test('markOutboxSent 에 deadline 을 주면 top-level deadline 을 무장한다 (SENT 승자만)', async () => {
+        await seedWithOutbox([
+            { id: 'A', queue: 'q', message: { n: 1 }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
+        ]);
+        const deadline = new Date('2026-12-31T00:00:00.000Z');
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), deadline);
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.outbox.find((e) => e.id === 'A').status).toBe('SENT');
+        expect(saga.deadline).toEqual(deadline);
+    });
+
+    test('이미 SENT 인 엔트리에는 deadline 을 무장하지 않는다 (no-op)', async () => {
+        await seedWithOutbox([
+            { id: 'A', queue: 'q', message: { n: 1 }, status: 'SENT', attempts: 1, lastAttemptAt: new Date() },
+        ]);
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'));
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.deadline).toBeNull(); // 무장되면 안 됨(이미 SENT)
+    });
 });
 
 describe('MongoSagaRepository — deadline 필드 라운드트립 (Phase 4b)', () => {
