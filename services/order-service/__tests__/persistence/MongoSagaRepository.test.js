@@ -131,13 +131,16 @@ describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxA
         expect(saga.outbox.find((e) => e.id === 'A').attempts).toBe(0);
     });
 
-    test('markOutboxSent 에 deadline 을 주면 top-level deadline 을 무장한다 (SENT 승자만)', async () => {
-        await seedWithOutbox([
-            { id: 'A', queue: 'q', message: { n: 1 }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
-        ]);
+    test('currentStep 이 그 단계면 SENT 승자에게 deadline 을 무장한다', async () => {
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { n: 1 }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
+            ],
+        });
         const deadline = new Date('2026-12-31T00:00:00.000Z');
 
-        await repo.markOutboxSent('s-out', 'A', new Date(), deadline);
+        await repo.markOutboxSent('s-out', 'A', new Date(), deadline, 'T2_PAYMENT');
 
         const saga = await repo.findBySagaId('s-out');
         expect(saga.outbox.find((e) => e.id === 'A').status).toBe('SENT');
@@ -145,14 +148,34 @@ describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxA
     });
 
     test('이미 SENT 인 엔트리에는 deadline 을 무장하지 않는다 (no-op)', async () => {
-        await seedWithOutbox([
-            { id: 'A', queue: 'q', message: { n: 1 }, status: 'SENT', attempts: 1, lastAttemptAt: new Date() },
-        ]);
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { n: 1 }, status: 'SENT', attempts: 1, lastAttemptAt: new Date() },
+            ],
+        });
 
-        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'));
+        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'), 'T2_PAYMENT');
 
         const saga = await repo.findBySagaId('s-out');
-        expect(saga.deadline).toBeNull(); // 무장되면 안 됨(이미 SENT)
+        expect(saga.deadline).toBeNull(); // SENT 승자가 아니므로 무장 안 함
+    });
+
+    test('currentStep 이 이미 다음 단계면 SENT 표시는 하되 deadline 은 무장하지 않는다 (거짓 타임아웃 방지, Codex high #1)', async () => {
+        // 빠른 reply 로 saga 가 이미 PAYMENT_CHARGED(currentStep=T3_POINTS)로 넘어간 뒤,
+        // 뒤늦은 CHARGE(stepName=T2_PAYMENT) SENT 가 와도 deadline 을 무장하면 안 된다.
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'PAYMENT_CHARGED', currentStep: 'T3_POINTS',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { stepName: 'T2_PAYMENT' }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
+            ],
+        });
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'), 'T2_PAYMENT');
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.outbox.find((e) => e.id === 'A').status).toBe('SENT'); // 발행 표시는 됨(재발행 방지)
+        expect(saga.deadline).toBeNull();                                   // 다음 단계로 넘어갔으므로 무장 안 함
     });
 });
 

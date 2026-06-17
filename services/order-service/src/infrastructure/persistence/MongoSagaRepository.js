@@ -156,23 +156,28 @@ class MongoSagaRepository {
 
     /**
      * outbox 엔트리를 SENT 로 표시한다(PENDING 일 때만 — 동시 릴레이에서 한 번만 성공).
-     * deadline 을 주면 같은 원자 update 로 top-level deadline 도 무장한다([Phase 4b] reply 대기 타이머 시작).
-     *
-     * 주의: id 와 status 조건을 같은 배열의 "단일 요소"에 묶어야 한다. $elemMatch 로 한 요소에 두 조건을
-     *   묶으면 positional `$` 가 그 요소를 정확히 지목하고, deadline 무장도 SENT 승자에게만 일어난다
-     *   (이미 SENT 인 엔트리엔 top-level 필터가 매칭 안 돼 update 전체가 no-op).
+     * [Phase 4b / Codex high #1] deadline 은 "아직 그 command 의 reply 를 기다리는 중"일 때만 무장한다:
+     *   SENT 승자이면서 saga 의 currentStep 이 그 command 의 stepName 과 같을 때만 top-level deadline 설정.
+     *   빠른 reply 로 이미 다음 단계로 넘어갔다면(currentStep 불일치) 무장하지 않아, 지나간 단계의 SENT 가
+     *   거짓 타임아웃 보상을 일으키는 것을 막는다. (발행 표시 자체는 항상 — 재발행 방지)
      * @param {string} sagaId
      * @param {string} entryId outbox 엔트리 id
      * @param {Date} now 발행 시도 시각
-     * @param {Date} [deadline] 무장할 reply 대기 마감 시각(없으면 deadline 변경 안 함)
+     * @param {Date} [deadline] 무장할 reply 대기 마감 시각(없으면 무장 안 함)
+     * @param {string} [stepName] 이 command 가 속한 단계(currentStep 일치 시에만 deadline 무장)
      */
-    async markOutboxSent(sagaId, entryId, now, deadline) {
-        const set = { 'outbox.$.status': 'SENT', 'outbox.$.lastAttemptAt': now };
-        if (deadline) set.deadline = deadline;
-        await SagaModel.updateOne(
+    async markOutboxSent(sagaId, entryId, now, deadline, stepName) {
+        const res = await SagaModel.updateOne(
             { sagaId, outbox: { $elemMatch: { id: entryId, status: 'PENDING' } } },
-            { $set: set },
+            { $set: { 'outbox.$.status': 'SENT', 'outbox.$.lastAttemptAt': now } },
         );
+        // SENT 승자(modifiedCount>0) + 아직 그 단계 대기 중(currentStep===stepName)일 때만 deadline 무장.
+        if (deadline && stepName && res.modifiedCount > 0) {
+            await SagaModel.updateOne(
+                { sagaId, currentStep: stepName },
+                { $set: { deadline } },
+            );
+        }
     }
 
     /**

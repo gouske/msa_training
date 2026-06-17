@@ -20,7 +20,7 @@ describe('OutboxRelayWorker', () => {
     test('PENDING 엔트리만 발행하고 SENT 표시 + deadline(now+stepTimeoutMs) 무장', async () => {
         repo.findWithPendingOutbox.mockResolvedValue([
             { sagaId: 's1', outbox: [
-                { id: 'e1', queue: 'saga.payment.command', message: { type: 'CHARGE' }, status: 'PENDING', attempts: 0 },
+                { id: 'e1', queue: 'saga.payment.command', message: { type: 'CHARGE', stepName: 'T2_PAYMENT' }, status: 'PENDING', attempts: 0 },
                 { id: 'e2', queue: 'saga.points.command', message: { type: 'EARN' }, status: 'SENT' },
             ] },
         ]);
@@ -28,9 +28,9 @@ describe('OutboxRelayWorker', () => {
         await worker.tick();
 
         expect(publisher.publish).toHaveBeenCalledTimes(1);
-        expect(publisher.publish).toHaveBeenCalledWith('saga.payment.command', { type: 'CHARGE' });
+        expect(publisher.publish).toHaveBeenCalledWith('saga.payment.command', { type: 'CHARGE', stepName: 'T2_PAYMENT' });
         const expectedDeadline = new Date(FIXED_NOW.getTime() + 15000);
-        expect(repo.markOutboxSent).toHaveBeenCalledWith('s1', 'e1', FIXED_NOW, expectedDeadline);
+        expect(repo.markOutboxSent).toHaveBeenCalledWith('s1', 'e1', FIXED_NOW, expectedDeadline, 'T2_PAYMENT');
         expect(repo.incOutboxAttempt).not.toHaveBeenCalled();
     });
 

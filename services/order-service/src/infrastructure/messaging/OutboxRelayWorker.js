@@ -60,7 +60,7 @@ class OutboxRelayWorker {
                     await this._publisher.publish(entry.queue, entry.message);
                     // [Phase 4b] 발행 성공 시점에 reply 대기 deadline 무장(적재≠발행이므로 SENT 시점에 찍는다).
                     const deadline = new Date(now.getTime() + this._stepTimeoutMs);
-                    await this._repo.markOutboxSent(saga.sagaId, entry.id, now, deadline);
+                    await this._repo.markOutboxSent(saga.sagaId, entry.id, now, deadline, entry.message.stepName);
                 } catch (err) {
                     // 브로커 일시 장애 — 다음 주기에 재시도(상태는 PENDING 유지)
                     await this._repo.incOutboxAttempt(saga.sagaId, entry.id, now);
