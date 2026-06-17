@@ -195,25 +195,34 @@ class SagaOrchestrator {
         // 재고 복원은 환불 성공(REFUND_SUCCEEDED) reply 에서 수행한다.
     }
 
-    /** 환불 성공: COMPENSATING 중일 때만 재고 복원(C1) → FAILED. 잘못된/지연/중복 reply 는 무시. */
+    /**
+     * 환불 성공: 재고 복원(C1) 후 FAILED 로 종결. 잘못된/지연/중복 reply 는 무시.
+     * [§17.12 final-review 자가치유] COMPENSATING 뿐 아니라, 이미 에스컬레이션된 COMPENSATION_FAILED 도 처리한다 —
+     * "MAX 재시도 소진 후 늦게 도착한 환불 성공"의 거짓 COMPENSATION_FAILED 라벨을 FAILED 로 교정하고 미복원 재고를 푼다.
+     * release 는 멱등 + 비종결 상태에서 먼저 실행 → 크래시 시 비종결 잔류로 복구 가능(Phase 4a Codex C1 순서 유지).
+     * 종결 CAS 는 COMPENSATING→FAILED 를 먼저 시도하고, (에스컬레이션이 끼어들었으면) COMPENSATION_FAILED→FAILED 로 마무리해
+     * read-then-CAS 갭에서 에스컬레이션과 겹쳐도 최종 상태가 FAILED 로 수렴하게 한다.
+     */
     async _onRefundSucceeded(saga) {
-        // 진입 가드 [Codex high] — 보상 중(COMPENSATING)이 아니면 부수효과를 절대 수행하지 않는다.
-        // 이미 COMPLETED/FAILED 인 saga 에 지연·중복·오라우팅된 REFUND_SUCCEEDED 가 와도
-        // release/updateStatus 가 실행돼 성공 주문이 FAILED 로 오염되거나 재고가 부풀려지는 것을 막는다.
-        // (COMPENSATING → COMPLETED 전이는 상태머신에 없으므로, COMPENSATING 이면 release 가 항상 정당하다.)
-        if (saga.state !== SagaState.COMPENSATING) return;
+        if (saga.state !== SagaState.COMPENSATING && saga.state !== SagaState.COMPENSATION_FAILED) return;
 
         const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
-        // release 는 멱등(releasedSagas)이라 종결 CAS 전에 안전하게 실행 — 크래시 시 COMPENSATING 잔류로 복구 가능.
-        await this._inventoryRepo.release(inv.itemId, inv.quantity, saga.sagaId);
+        await this._inventoryRepo.release(inv.itemId, inv.quantity, saga.sagaId); // 멱등
         await this._orderRepo.updateStatus(saga.orderId, 'FAILED');
-        await this._sagaRepo.compareAndAdvance(saga.sagaId, {
-            from: SagaState.COMPENSATING, to: SagaState.FAILED,
-            steps: [
-                { name: STEP.PAYMENT,   status: 'COMPENSATED' },
-                { name: STEP.INVENTORY, status: 'COMPENSATED' },
-            ],
+
+        const compensatedSteps = [
+            { name: STEP.PAYMENT,   status: 'COMPENSATED' },
+            { name: STEP.INVENTORY, status: 'COMPENSATED' },
+        ];
+        const advanced = await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+            from: SagaState.COMPENSATING, to: SagaState.FAILED, steps: compensatedSteps,
         });
+        if (!advanced) {
+            // COMPENSATING 에서 못 옮겼다 = 에스컬레이션이 먼저 일어났다 → COMPENSATION_FAILED 에서 자가치유.
+            await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+                from: SagaState.COMPENSATION_FAILED, to: SagaState.FAILED, steps: compensatedSteps,
+            });
+        }
     }
 
     /** 환불 실패(REFUND_FAILED): 보상 재시도 또는 상한 도달 시 에스컬레이션. 스윕의 COMPENSATING 분기와 공용. */

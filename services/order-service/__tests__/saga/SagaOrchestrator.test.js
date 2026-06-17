@@ -207,6 +207,21 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(mockOrderRepo.updateStatus).not.toHaveBeenCalled();
             expect(mockSagaRepo.compareAndAdvance).not.toHaveBeenCalled();
         });
+
+        test('에스컬레이션된 COMPENSATION_FAILED saga 에 늦은 REFUND_SUCCEEDED 가 오면 FAILED 로 자가치유한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(chargedSaga({ state: SagaState.COMPENSATION_FAILED }));
+            // 첫 CAS(from COMPENSATING) 패배 → 둘째 CAS(from COMPENSATION_FAILED) 승리
+            mockSagaRepo.compareAndAdvance
+                .mockResolvedValueOnce(null)
+                .mockResolvedValueOnce({ ok: true });
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_SUCCEEDED, stepName: STEP.PAYMENT });
+
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
+            expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.COMPENSATION_FAILED, to: SagaState.FAILED });
+        });
     });
 
     describe('handleReply() — 포인트 비활성(POINTS_ENABLED=false)', () => {

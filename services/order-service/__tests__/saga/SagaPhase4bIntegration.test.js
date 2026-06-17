@@ -175,4 +175,26 @@ describe('Saga Phase 4b 통합 시나리오', () => {
         expect(saga.steps.find((s) => s.name === STEP.PAYMENT).compensateAttempts).toBe(1); // 단 1회 증가
         expect(saga.outbox.filter((e) => e.status === 'PENDING' && e.message.type === MSG.REFUND)).toHaveLength(1);
     });
+
+    test('⑦ 자가치유 — 에스컬레이션 후 늦은 REFUND_SUCCEEDED 가 COMPENSATION_FAILED→FAILED 로 교정', async () => {
+        await invRepo.reserve('ITEM-1', 2, 's1'); // available 10→8 (에스컬레이션 시점엔 아직 미복원)
+        await sagaRepo.save({
+            sagaId: 's1', orderId: 'order-1', state: SagaState.COMPENSATION_FAILED, currentStep: STEP.PAYMENT, deadline: null,
+            steps: [
+                { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                { name: STEP.PAYMENT,   status: 'FAILED', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' }, compensateAttempts: 5 },
+                { name: STEP.POINTS,    status: 'FAILED', payload: { userEmail: 'b@test.com', amount: 10000 } },
+            ],
+            outbox: [],
+        });
+        const orchestrator = makeOrchestrator();
+
+        await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_SUCCEEDED, stepName: STEP.PAYMENT });
+
+        const saga = await sagaRepo.findBySagaId('s1');
+        expect(saga.state).toBe(SagaState.FAILED); // 자가치유됨
+        const inv = await InventoryModel.findOne({ itemId: 'ITEM-1' }).lean();
+        expect(inv.available).toBe(10); // 미복원이던 재고가 복원됨
+        expect(inv.releasedSagas).toContain('s1');
+    });
 });

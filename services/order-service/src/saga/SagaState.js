@@ -27,7 +27,8 @@ const TRANSITIONS = Object.freeze({
     [SagaState.COMPENSATING]:        [SagaState.FAILED, SagaState.COMPENSATION_FAILED],
     [SagaState.COMPLETED]:           [],
     [SagaState.FAILED]:              [],
-    [SagaState.COMPENSATION_FAILED]: [],
+    // COMPENSATION_FAILED → FAILED: 에스컬레이션 후 늦게 도착한 환불 성공(REFUND_SUCCEEDED)으로 자가치유(§17.12 final-review).
+    [SagaState.COMPENSATION_FAILED]: [SagaState.FAILED],
 });
 
 /** from → to 전이가 허용되는지 여부 */
