@@ -94,6 +94,42 @@ class MongoSagaRepository {
     }
 
     /**
+     * [Phase 4b] COMPENSATING 보상(환불) 재시도 — compensateAttempts 를 CAS 토큰으로 사용.
+     * 현재 attempts 가 expectedAttempts 와 같을 때만 +1 하고 REFUND 를 재적재한다.
+     * 동시 호출(중복 REFUND_FAILED + 스윕)에서 정확히 하나만 성공 → 이중 재적재를 막는다.
+     * @param {string} sagaId
+     * @param {object} opts
+     * @param {string} opts.stepName 보상 대상 단계(T2_PAYMENT)
+     * @param {number} opts.expectedAttempts 기대 현재 시도 횟수(CAS 토큰)
+     * @param {Array<{queue:string,message:object}>} [opts.outbox] 재적재할 REFUND command
+     * @returns {Promise<object|null>} 갱신된 saga 또는 null(CAS 패배)
+     */
+    async retryCompensation(sagaId, { stepName, expectedAttempts, outbox = [] }) {
+        const update = {
+            $inc: { 'steps.$[s].compensateAttempts': 1 },
+            $set: { deadline: null }, // 재적재 — 릴레이가 REFUND 를 SENT 표시할 때 다시 무장
+        };
+        if (outbox.length > 0) {
+            update.$push = {
+                outbox: {
+                    $each: outbox.map((o) => ({
+                        id: randomUUID(), queue: o.queue, message: o.message,
+                        status: 'PENDING', attempts: 0, lastAttemptAt: null,
+                    })),
+                },
+            };
+        }
+        return SagaModel.findOneAndUpdate(
+            {
+                sagaId, state: SagaState.COMPENSATING,
+                steps: { $elemMatch: { name: stepName, compensateAttempts: expectedAttempts } },
+            },
+            update,
+            { arrayFilters: [{ 's.name': stepName }], returnDocument: 'after' },
+        ).lean();
+    }
+
+    /**
      * PENDING outbox 엔트리를 가진 saga 들을 조회한다(릴레이 워커용).
      * @param {number} limit 최대 조회 개수
      * @returns {Promise<Array<object>>}

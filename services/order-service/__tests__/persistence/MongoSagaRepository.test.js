@@ -202,3 +202,60 @@ describe('MongoSagaRepository — findTimedOut (Phase 4b 스윕 질의)', () => 
         expect(timedOut.map((s) => s.sagaId)).toEqual(['comp']);
     });
 });
+
+describe('MongoSagaRepository — retryCompensation (Phase 4b 보상 재시도 CAS)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    const seedCompensating = (compensateAttempts) => repo.save({
+        sagaId: 'r1', orderId: 'o', state: 'COMPENSATING', currentStep: 'T2_PAYMENT',
+        deadline: new Date('2020-01-01T00:00:00.000Z'),
+        steps: [{ name: 'T2_PAYMENT', status: 'DONE', replyData: { paymentId: 'PAY-1' }, compensateAttempts }],
+        outbox: [],
+    });
+
+    const refundEntry = { queue: 'saga.payment.command', message: { type: 'REFUND' } };
+
+    test('expectedAttempts 일치 시 attempts++ + REFUND 재적재 + deadline clear 후 문서 반환', async () => {
+        await seedCompensating(0);
+
+        const result = await repo.retryCompensation('r1', {
+            stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry],
+        });
+
+        expect(result).not.toBeNull();
+        expect(result.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(1);
+        expect(result.outbox.filter((e) => e.status === 'PENDING')).toHaveLength(1);
+        expect(result.deadline).toBeNull();
+    });
+
+    test('expectedAttempts 불일치 시 null 반환 + 변경 없음 (CAS 패배)', async () => {
+        await seedCompensating(2); // 실제는 2
+
+        const result = await repo.retryCompensation('r1', {
+            stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry],
+        });
+
+        expect(result).toBeNull();
+        const saga = await repo.findBySagaId('r1');
+        expect(saga.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(2);
+        expect(saga.outbox).toHaveLength(0);
+    });
+
+    test('동시 호출 시 정확히 하나만 재적재한다 (동시성 핵심)', async () => {
+        await seedCompensating(0);
+
+        const [a, b] = await Promise.all([
+            repo.retryCompensation('r1', { stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry] }),
+            repo.retryCompensation('r1', { stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry] }),
+        ]);
+
+        expect([a, b].filter((r) => r !== null)).toHaveLength(1);
+        const saga = await repo.findBySagaId('r1');
+        expect(saga.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(1);
+        expect(saga.outbox.filter((e) => e.status === 'PENDING')).toHaveLength(1);
+    });
+});
