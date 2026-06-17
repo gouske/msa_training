@@ -89,6 +89,8 @@ node index.js  # 실행
   - `RabbitMQConnection.js` — 상주 연결/채널
   - `SagaCommandPublisher.js` — command 발행(commandPublisher 구현)
   - `SagaReplyConsumer.js` — saga.reply 수신 → handleReply
+  - `OutboxRelayWorker.js` — PENDING outbox command 발행 + SENT 시 deadline 무장 [제25강 Phase 4]
+  - `TimeoutSweepWorker.js` — deadline 초과 saga 폴링 → 타임아웃 보상/정지-전진 재구동 [제25강 Phase 4b]
 
 > [제25강 Phase 2] 주문 라우트는 이제 Saga 오케스트레이션(재고 예약 → 결제 command)으로 처리된다.
 > 기존 order_queue 레거시 흐름은 코드로 보존되어 있으나 라우트에서 호출되지 않는다.
