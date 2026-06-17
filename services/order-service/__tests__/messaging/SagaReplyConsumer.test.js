@@ -122,3 +122,22 @@ describe('SagaReplyConsumer — 재시도/재구독', () => {
         expect(channelProvider).toHaveBeenCalledTimes(2); // 재구독 시도
     });
 });
+
+describe('SagaReplyConsumer — stop() (Phase 4b graceful shutdown)', () => {
+    test('stop() 은 예약된 재시작 타이머를 취소한다', async () => {
+        jest.useFakeTimers();
+        const consumer = new SagaReplyConsumer({
+            channelProvider: () => Promise.reject(new Error('rabbit down')), // 시작 실패 → 재시작 예약
+            orchestrator: { handleReply: jest.fn() },
+            retryDelayMs: 5000,
+        });
+
+        await consumer.start();           // 실패 → _scheduleRestart 로 타이머 설정
+        expect(consumer._restartTimer).not.toBeNull();
+
+        consumer.stop();                  // 타이머 취소
+        expect(consumer._restartTimer).toBeNull();
+
+        jest.useRealTimers();
+    });
+});

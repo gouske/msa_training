@@ -116,6 +116,61 @@ describe('consulRegistrar', () => {
         process.removeAllListeners('SIGTERM');
     });
 
+    test('[Phase 4b] setupGracefulShutdown 은 SIGTERM 시 onShutdown 콜백을 deregister BEFORE 호출한다', async () => {
+        // GIVEN
+        nock(CONSUL_BASE)
+            .put('/v1/agent/service/deregister/order-service-h-8081')
+            .reply(200);
+
+        const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
+        const callOrder = [];
+
+        const onShutdown = jest.fn(() => {
+            callOrder.push('onShutdown');
+        });
+
+        // WHEN
+        setupGracefulShutdown(CONSUL_BASE, 'order-service-h-8081', onShutdown);
+        process.emit('SIGTERM');
+
+        // 비동기 deregister 완료 대기
+        await new Promise((r) => setTimeout(r, 100));
+
+        // THEN: onShutdown 은 호출되었고, deregister 이전에 호출됨
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        expect(exitSpy).toHaveBeenCalledWith(0);
+
+        exitSpy.mockRestore();
+        process.removeAllListeners('SIGTERM');
+    });
+
+    test('setupGracefulShutdown 은 onShutdown 예외를 무시하고 계속 진행한다 (guarded)', async () => {
+        // GIVEN
+        nock(CONSUL_BASE)
+            .put('/v1/agent/service/deregister/order-service-h-8081')
+            .reply(200);
+
+        const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
+
+        const onShutdown = jest.fn(() => {
+            throw new Error('callback explosion');
+        });
+
+        // WHEN
+        setupGracefulShutdown(CONSUL_BASE, 'order-service-h-8081', onShutdown);
+        process.emit('SIGTERM');
+
+        // 비동기 deregister 완료 대기
+        await new Promise((r) => setTimeout(r, 100));
+
+        // THEN: onShutdown 예외에도 불구하고 deregister와 process.exit 가 호출됨
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        expect(exitSpy).toHaveBeenCalledWith(0);
+
+        exitSpy.mockRestore();
+        process.removeAllListeners('SIGTERM');
+    });
+
     // ──────────────────────────────────────────────────────────────────────
     // [K8s + Consul 회고] instanceKey 옵션 (POD_NAME 주입 시나리오).
     //

@@ -62,6 +62,22 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-2', 'FAILED');
             expect(result.status).toBe('FAILED');
         });
+
+        test('STARTED saga 저장 시 top-level deadline 을 now+stepTimeoutMs 로 무장한다(정지-전진 감지)', async () => {
+            mockOrderRepo.save.mockResolvedValue('order-3');
+            mockInventoryRepo.reserve.mockResolvedValue(true);
+            const FIXED_NOW = new Date('2026-06-17T12:00:00.000Z');
+            const o = new SagaOrchestrator({
+                orderRepository: mockOrderRepo, inventoryRepository: mockInventoryRepo,
+                sagaRepository: mockSagaRepo, now: () => FIXED_NOW, stepTimeoutMs: 15000,
+            });
+
+            await o.startOrder({ userEmail: 'b@test.com', itemId: 'ITEM-1', quantity: 1, price: 1000 });
+
+            const savedSaga = mockSagaRepo.save.mock.calls[0][0];
+            expect(savedSaga.state).toBe(SagaState.STARTED);
+            expect(savedSaga.deadline).toEqual(new Date(FIXED_NOW.getTime() + 15000));
+        });
     });
 
     const sagaFixture = (overrides = {}) => ({
@@ -191,6 +207,21 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(mockOrderRepo.updateStatus).not.toHaveBeenCalled();
             expect(mockSagaRepo.compareAndAdvance).not.toHaveBeenCalled();
         });
+
+        test('에스컬레이션된 COMPENSATION_FAILED saga 에 늦은 REFUND_SUCCEEDED 가 오면 FAILED 로 자가치유한다', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(chargedSaga({ state: SagaState.COMPENSATION_FAILED }));
+            // 첫 CAS(from COMPENSATING) 패배 → 둘째 CAS(from COMPENSATION_FAILED) 승리
+            mockSagaRepo.compareAndAdvance
+                .mockResolvedValueOnce(null)
+                .mockResolvedValueOnce({ ok: true });
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_SUCCEEDED, stepName: STEP.PAYMENT });
+
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
+            expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.COMPENSATION_FAILED, to: SagaState.FAILED });
+        });
     });
 
     describe('handleReply() — 포인트 비활성(POINTS_ENABLED=false)', () => {
@@ -208,6 +239,122 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(opts.outbox).toBeUndefined();
             expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'SUCCESS');
             expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.PAYMENT_CHARGED, to: SagaState.COMPLETED });
+        });
+    });
+
+    describe('handleTimeout() — 타임아웃 스윕 위임 (Phase 4b)', () => {
+        test('STARTED 면 재고 예약 후 INVENTORY_RESERVED 로 재구동한다(정지-전진)', async () => {
+            mockInventoryRepo.reserve.mockResolvedValue(true);
+            const saga = {
+                sagaId: 's1', orderId: 'order-1', state: SagaState.STARTED, correlationId: 'trace-1',
+                steps: [
+                    { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId: 'order-1', amount: 10000 } },
+                    { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'b@test.com', amount: 10000 } },
+                ],
+            };
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(mockInventoryRepo.reserve).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.STARTED, to: SagaState.INVENTORY_RESERVED });
+            expect(advanceCall(0)[1].outbox[0].message).toMatchObject({ type: MSG.CHARGE });
+        });
+
+        test('STARTED 인데 재고 진짜 부족이면 FAILED 로 종료한다', async () => {
+            mockInventoryRepo.reserve.mockResolvedValue(false);
+            const saga = {
+                sagaId: 's1', orderId: 'order-1', state: SagaState.STARTED,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId: 'ITEM-1', quantity: 99 } },
+                    { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId: 'order-1', amount: 10000 } },
+                ],
+            };
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.STARTED, to: SagaState.FAILED });
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+        });
+
+        test('INVENTORY_RESERVED 면 결제 실패 보상과 동일 경로(재고복원→FAILED)', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture());
+            const saga = sagaFixture();
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.INVENTORY_RESERVED, to: SagaState.COMPENSATING });
+            expect(advanceCall(0)[1].outbox).toBeUndefined(); // 결제 미확정 → 환불 적재 없음(재고복원만, L4)
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
+        });
+
+        test('PAYMENT_CHARGED 면 포인트 실패 보상과 동일 경로(REFUND 적재)', async () => {
+            const charged = sagaFixture({
+                state: SagaState.PAYMENT_CHARGED, currentStep: STEP.POINTS,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' } },
+                    { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'b@test.com', amount: 10000 } },
+                ],
+            });
+
+            await orchestrator.handleTimeout(charged);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.PAYMENT_CHARGED, to: SagaState.COMPENSATING });
+            expect(advanceCall(0)[1].outbox[0].message).toMatchObject({ type: MSG.REFUND, payload: { paymentId: 'PAY-1', orderId: 'order-1' } });
+        });
+    });
+
+    describe('handleReply() — 환불 실패 복구 (Phase 4b)', () => {
+        const compensatingSaga = (compensateAttempts = 0) => ({
+            sagaId: 's1', orderId: 'order-1', state: SagaState.COMPENSATING, correlationId: 'trace-1',
+            steps: [
+                { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' }, compensateAttempts },
+                { name: STEP.POINTS,    status: 'FAILED', payload: { userEmail: 'b@test.com', amount: 10000 } },
+            ],
+        });
+
+        beforeEach(() => {
+            mockSagaRepo.retryCompensation = jest.fn().mockResolvedValue({ ok: true });
+        });
+
+        test('attempts 가 상한 미만이면 REFUND 를 재적재한다(attempts CAS)', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(compensatingSaga(0));
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_FAILED, stepName: STEP.PAYMENT });
+
+            expect(mockSagaRepo.retryCompensation).toHaveBeenCalledWith('s1', expect.objectContaining({
+                stepName: STEP.PAYMENT, expectedAttempts: 0,
+            }));
+            const { outbox } = mockSagaRepo.retryCompensation.mock.calls[0][1];
+            expect(outbox[0].message).toMatchObject({ type: MSG.REFUND, payload: { paymentId: 'PAY-1', orderId: 'order-1' } });
+        });
+
+        test('attempts+1 이 상한에 도달하면 COMPENSATION_FAILED 로 에스컬레이션 + 에러 로그', async () => {
+            const o = new SagaOrchestrator({
+                orderRepository: mockOrderRepo, inventoryRepository: mockInventoryRepo,
+                sagaRepository: mockSagaRepo, maxCompensateAttempts: 2,
+            });
+            mockSagaRepo.findBySagaId.mockResolvedValue(compensatingSaga(1)); // 1+1=2 >= 2
+            const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+            await o.handleReply({ sagaId: 's1', type: MSG.REFUND_FAILED, stepName: STEP.PAYMENT });
+
+            expect(mockSagaRepo.retryCompensation).not.toHaveBeenCalled();
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.COMPENSATION_FAILED });
+            expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('운영자 개입'));
+            errSpy.mockRestore();
+        });
+
+        test('COMPENSATING 이 아니면 아무 것도 하지 않는다(가드)', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue({ ...compensatingSaga(0), state: SagaState.COMPLETED });
+
+            await orchestrator.handleReply({ sagaId: 's1', type: MSG.REFUND_FAILED, stepName: STEP.PAYMENT });
+
+            expect(mockSagaRepo.retryCompensation).not.toHaveBeenCalled();
+            expect(mockSagaRepo.compareAndAdvance).not.toHaveBeenCalled();
         });
     });
 });

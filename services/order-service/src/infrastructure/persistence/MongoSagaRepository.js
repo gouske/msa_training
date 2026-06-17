@@ -9,6 +9,15 @@
  */
 const { randomUUID } = require('crypto');
 const SagaModel = require('../../../models/Saga');
+const { SagaState } = require('../../saga/SagaState');
+
+// [Phase 4b] 타임아웃 스윕 대상이 되는 "활성"(비종결) 상태들.
+const ACTIVE_STATES = [
+    SagaState.STARTED,
+    SagaState.INVENTORY_RESERVED,
+    SagaState.PAYMENT_CHARGED,
+    SagaState.COMPENSATING,
+];
 
 class MongoSagaRepository {
     /**
@@ -47,7 +56,9 @@ class MongoSagaRepository {
      * @returns {Promise<object|null>} 갱신된 saga(평범한 객체) 또는 null
      */
     async compareAndAdvance(sagaId, { from, to, currentStep, steps = [], outbox = [] }) {
-        const set = { state: to };
+        // [Phase 4b] 모든 전이는 deadline 을 비운다 — 다음 command 가 실제 SENT 될 때 릴레이가 다시 무장한다.
+        // (전이 직후~발행 전 구간에 옛 deadline 이 남아 거짓 타임아웃 보상되는 것을 막는다. 설계 §17.12.1)
+        const set = { state: to, deadline: null };
         if (currentStep) set.currentStep = currentStep;
 
         // 각 step 을 arrayFilters 로 정확히 지목해 갱신한다.
@@ -83,6 +94,43 @@ class MongoSagaRepository {
     }
 
     /**
+     * [Phase 4b] COMPENSATING 보상(환불) 재시도 — compensateAttempts 를 CAS 토큰으로 사용.
+     * 현재 attempts 가 expectedAttempts 와 같을 때만 +1 하고 REFUND 를 재적재한다.
+     * 동시 호출(중복 REFUND_FAILED + 스윕)에서 정확히 하나만 성공 → 이중 재적재를 막는다.
+     * @param {string} sagaId
+     * @param {object} opts
+     * @param {string} opts.stepName 보상 대상 단계(T2_PAYMENT)
+     * @param {number} opts.expectedAttempts 기대 현재 시도 횟수(CAS 토큰)
+     * @param {Array<{queue:string,message:object}>} [opts.outbox] 재적재할 REFUND command
+     * @returns {Promise<object|null>} 갱신된 saga 또는 null(CAS 패배)
+     */
+    async retryCompensation(sagaId, { stepName, expectedAttempts, outbox = [] }) {
+        const update = {
+            $inc: { 'steps.$[s].compensateAttempts': 1 },
+            $set: { deadline: null }, // 재적재 — 릴레이가 REFUND 를 SENT 표시할 때 다시 무장
+        };
+        if (outbox.length > 0) {
+            update.$push = {
+                outbox: {
+                    $each: outbox.map((o) => ({
+                        id: randomUUID(), queue: o.queue, message: o.message,
+                        status: 'PENDING', attempts: 0, lastAttemptAt: null,
+                    })),
+                },
+            };
+        }
+        return SagaModel.findOneAndUpdate(
+            {
+                sagaId, state: SagaState.COMPENSATING,
+                steps: { $elemMatch: { name: stepName, compensateAttempts: expectedAttempts } },
+            },
+            update,
+            // arrayFilters 에도 CAS 토큰(compensateAttempts)을 명시 — 갱신 대상 단계를 의도대로 한정.
+            { arrayFilters: [{ 's.name': stepName, 's.compensateAttempts': expectedAttempts }], returnDocument: 'after' },
+        ).lean();
+    }
+
+    /**
      * PENDING outbox 엔트리를 가진 saga 들을 조회한다(릴레이 워커용).
      * @param {number} limit 최대 조회 개수
      * @returns {Promise<Array<object>>}
@@ -92,21 +140,44 @@ class MongoSagaRepository {
     }
 
     /**
+     * [Phase 4b] 활성 상태이면서 deadline 이 지난(reply 미수신/정지) saga 들을 조회한다(스윕 워커용).
+     * `{ deadline: { $lt: now } }` 는 타입 브래킷팅으로 null/미설정을 매칭하지 않으므로,
+     * deadline 이 비워진(대기 중 아님) saga 는 자동 제외된다.
+     * @param {Date} now 현재 시각
+     * @param {number} limit 최대 조회 개수
+     * @returns {Promise<Array<object>>}
+     */
+    async findTimedOut(now, limit = 20) {
+        return SagaModel.find({
+            state: { $in: ACTIVE_STATES },
+            deadline: { $lt: now },
+        }).limit(limit).lean();
+    }
+
+    /**
      * outbox 엔트리를 SENT 로 표시한다(PENDING 일 때만 — 동시 릴레이에서 한 번만 성공).
-     *
-     * 주의: id 와 status 조건을 같은 배열의 "단일 요소"에 묶어야 한다. dot-notation 으로
-     *   { 'outbox.id': id, 'outbox.status': 'PENDING' } 를 쓰면 두 조건이 서로 다른 요소에
-     *   매칭될 수 있어 positional `$` 가 엉뚱한 엔트리를 SENT 로 만든다(미발행 command 유실).
-     *   $elemMatch 로 한 요소에 두 조건을 묶으면 `$` 가 그 요소를 정확히 지목한다.
+     * [Phase 4b / Codex high #1] deadline 은 "아직 그 command 의 reply 를 기다리는 중"일 때만 무장한다:
+     *   SENT 승자이면서 saga 의 currentStep 이 그 command 의 stepName 과 같을 때만 top-level deadline 설정.
+     *   빠른 reply 로 이미 다음 단계로 넘어갔다면(currentStep 불일치) 무장하지 않아, 지나간 단계의 SENT 가
+     *   거짓 타임아웃 보상을 일으키는 것을 막는다. (발행 표시 자체는 항상 — 재발행 방지)
      * @param {string} sagaId
      * @param {string} entryId outbox 엔트리 id
      * @param {Date} now 발행 시도 시각
+     * @param {Date} [deadline] 무장할 reply 대기 마감 시각(없으면 무장 안 함)
+     * @param {string} [stepName] 이 command 가 속한 단계(currentStep 일치 시에만 deadline 무장)
      */
-    async markOutboxSent(sagaId, entryId, now) {
-        await SagaModel.updateOne(
+    async markOutboxSent(sagaId, entryId, now, deadline, stepName) {
+        const res = await SagaModel.updateOne(
             { sagaId, outbox: { $elemMatch: { id: entryId, status: 'PENDING' } } },
             { $set: { 'outbox.$.status': 'SENT', 'outbox.$.lastAttemptAt': now } },
         );
+        // SENT 승자(modifiedCount>0) + 아직 그 단계 대기 중(currentStep===stepName)일 때만 deadline 무장.
+        if (deadline && stepName && res.modifiedCount > 0) {
+            await SagaModel.updateOne(
+                { sagaId, currentStep: stepName },
+                { $set: { deadline } },
+            );
+        }
     }
 
     /**

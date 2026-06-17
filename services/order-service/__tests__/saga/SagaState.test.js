@@ -37,6 +37,11 @@ describe('SagaState 전이 규칙', () => {
         expect(canTransition(SagaState.STARTED, SagaState.PAYMENT_CHARGED)).toBe(false);
     });
 
+    test('COMPENSATION_FAILED 는 FAILED 로만 자가치유 전이할 수 있다', () => {
+        expect(canTransition(SagaState.COMPENSATION_FAILED, SagaState.FAILED)).toBe(true);
+        expect(canTransition(SagaState.COMPENSATION_FAILED, SagaState.COMPLETED)).toBe(false);
+    });
+
     test('assertTransition 은 잘못된 전이에서 에러를 던진다', () => {
         expect(() => assertTransition(SagaState.STARTED, SagaState.COMPLETED)).toThrow();
     });

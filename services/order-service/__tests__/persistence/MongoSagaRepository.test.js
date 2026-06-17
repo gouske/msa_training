@@ -65,6 +65,21 @@ describe('MongoSagaRepository — compareAndAdvance (CAS + outbox)', () => {
         const winners = [a, b].filter((r) => r !== null);
         expect(winners).toHaveLength(1); // 단 하나의 처리자만 전이에 성공
     });
+
+    test('전이에 성공하면 deadline 을 null 로 비운다 (다음 SENT 까지 스윕 제외)', async () => {
+        await repo.save({
+            sagaId: 's-dl', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            deadline: new Date('2020-01-01T00:00:00.000Z'), // 과거 — 비워져야 함
+            steps: [{ name: 'T2_PAYMENT', status: 'PENDING', payload: {} }], outbox: [],
+        });
+
+        const result = await repo.compareAndAdvance('s-dl', {
+            from: 'INVENTORY_RESERVED', to: 'COMPENSATING',
+            steps: [{ name: 'T2_PAYMENT', status: 'FAILED' }],
+        });
+
+        expect(result.deadline).toBeNull();
+    });
 });
 
 describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxAttempt)', () => {
@@ -114,5 +129,156 @@ describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxA
         const saga = await repo.findBySagaId('s-out');
         expect(saga.outbox.find((e) => e.id === 'B').attempts).toBe(1);
         expect(saga.outbox.find((e) => e.id === 'A').attempts).toBe(0);
+    });
+
+    test('currentStep 이 그 단계면 SENT 승자에게 deadline 을 무장한다', async () => {
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { n: 1 }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
+            ],
+        });
+        const deadline = new Date('2026-12-31T00:00:00.000Z');
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), deadline, 'T2_PAYMENT');
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.outbox.find((e) => e.id === 'A').status).toBe('SENT');
+        expect(saga.deadline).toEqual(deadline);
+    });
+
+    test('이미 SENT 인 엔트리에는 deadline 을 무장하지 않는다 (no-op)', async () => {
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { n: 1 }, status: 'SENT', attempts: 1, lastAttemptAt: new Date() },
+            ],
+        });
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'), 'T2_PAYMENT');
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.deadline).toBeNull(); // SENT 승자가 아니므로 무장 안 함
+    });
+
+    test('currentStep 이 이미 다음 단계면 SENT 표시는 하되 deadline 은 무장하지 않는다 (거짓 타임아웃 방지, Codex high #1)', async () => {
+        // 빠른 reply 로 saga 가 이미 PAYMENT_CHARGED(currentStep=T3_POINTS)로 넘어간 뒤,
+        // 뒤늦은 CHARGE(stepName=T2_PAYMENT) SENT 가 와도 deadline 을 무장하면 안 된다.
+        await repo.save({
+            sagaId: 's-out', orderId: 'o', state: 'PAYMENT_CHARGED', currentStep: 'T3_POINTS',
+            steps: [], outbox: [
+                { id: 'A', queue: 'q', message: { stepName: 'T2_PAYMENT' }, status: 'PENDING', attempts: 0, lastAttemptAt: null },
+            ],
+        });
+
+        await repo.markOutboxSent('s-out', 'A', new Date(), new Date('2026-12-31T00:00:00.000Z'), 'T2_PAYMENT');
+
+        const saga = await repo.findBySagaId('s-out');
+        expect(saga.outbox.find((e) => e.id === 'A').status).toBe('SENT'); // 발행 표시는 됨(재발행 방지)
+        expect(saga.deadline).toBeNull();                                   // 다음 단계로 넘어갔으므로 무장 안 함
+    });
+});
+
+describe('MongoSagaRepository — deadline 필드 라운드트립 (Phase 4b)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    test('top-level deadline 을 저장하고 그대로 읽어온다', async () => {
+        const deadline = new Date('2026-06-17T00:00:00.000Z');
+        await repo.save({ sagaId: 'd1', orderId: 'o', state: 'STARTED', steps: [], outbox: [], deadline });
+
+        const saga = await repo.findBySagaId('d1');
+        expect(saga.deadline).toEqual(deadline);
+    });
+});
+
+describe('MongoSagaRepository — findTimedOut (Phase 4b 스윕 질의)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    const now = new Date('2026-06-17T12:00:00.000Z');
+    const past = new Date('2026-06-17T11:00:00.000Z');
+    const future = new Date('2026-06-17T13:00:00.000Z');
+
+    test('활성 상태 + deadline 과거인 saga 만 반환한다', async () => {
+        await repo.save({ sagaId: 'a', orderId: 'o', state: 'INVENTORY_RESERVED', deadline: past, steps: [], outbox: [] });   // 대상
+        await repo.save({ sagaId: 'b', orderId: 'o', state: 'PAYMENT_CHARGED', deadline: future, steps: [], outbox: [] });   // deadline 미도래
+        await repo.save({ sagaId: 'c', orderId: 'o', state: 'COMPLETED', deadline: past, steps: [], outbox: [] });           // 종결 상태
+        await repo.save({ sagaId: 'd', orderId: 'o', state: 'INVENTORY_RESERVED', deadline: null, steps: [], outbox: [] });  // deadline 없음(대기 아님)
+
+        const timedOut = await repo.findTimedOut(now, 20);
+
+        expect(timedOut.map((s) => s.sagaId).sort()).toEqual(['a']);
+    });
+
+    test('COMPENSATING + deadline 과거도 반환한다(보상 재시도 대상)', async () => {
+        await repo.save({ sagaId: 'comp', orderId: 'o', state: 'COMPENSATING', deadline: past, steps: [], outbox: [] });
+
+        const timedOut = await repo.findTimedOut(now, 20);
+
+        expect(timedOut.map((s) => s.sagaId)).toEqual(['comp']);
+    });
+});
+
+describe('MongoSagaRepository — retryCompensation (Phase 4b 보상 재시도 CAS)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    const seedCompensating = (compensateAttempts) => repo.save({
+        sagaId: 'r1', orderId: 'o', state: 'COMPENSATING', currentStep: 'T2_PAYMENT',
+        deadline: new Date('2020-01-01T00:00:00.000Z'),
+        steps: [{ name: 'T2_PAYMENT', status: 'DONE', replyData: { paymentId: 'PAY-1' }, compensateAttempts }],
+        outbox: [],
+    });
+
+    const refundEntry = { queue: 'saga.payment.command', message: { type: 'REFUND' } };
+
+    test('expectedAttempts 일치 시 attempts++ + REFUND 재적재 + deadline clear 후 문서 반환', async () => {
+        await seedCompensating(0);
+
+        const result = await repo.retryCompensation('r1', {
+            stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry],
+        });
+
+        expect(result).not.toBeNull();
+        expect(result.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(1);
+        expect(result.outbox.filter((e) => e.status === 'PENDING')).toHaveLength(1);
+        expect(result.deadline).toBeNull();
+    });
+
+    test('expectedAttempts 불일치 시 null 반환 + 변경 없음 (CAS 패배)', async () => {
+        await seedCompensating(2); // 실제는 2
+
+        const result = await repo.retryCompensation('r1', {
+            stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry],
+        });
+
+        expect(result).toBeNull();
+        const saga = await repo.findBySagaId('r1');
+        expect(saga.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(2);
+        expect(saga.outbox).toHaveLength(0);
+    });
+
+    test('동시 호출 시 정확히 하나만 재적재한다 (동시성 핵심)', async () => {
+        await seedCompensating(0);
+
+        const [a, b] = await Promise.all([
+            repo.retryCompensation('r1', { stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry] }),
+            repo.retryCompensation('r1', { stepName: 'T2_PAYMENT', expectedAttempts: 0, outbox: [refundEntry] }),
+        ]);
+
+        expect([a, b].filter((r) => r !== null)).toHaveLength(1);
+        const saga = await repo.findBySagaId('r1');
+        expect(saga.steps.find((s) => s.name === 'T2_PAYMENT').compensateAttempts).toBe(1);
+        expect(saga.outbox.filter((e) => e.status === 'PENDING')).toHaveLength(1);
     });
 });

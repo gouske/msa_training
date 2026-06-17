@@ -15,23 +15,30 @@ const OrderItem = require('../domain/OrderItem');
 const Money = require('../domain/Money');
 const { SagaState } = require('./SagaState');
 const { QUEUE, MSG, STEP } = require('./sagaContracts');
+const { STEP_TIMEOUT_MS, MAX_COMPENSATE_ATTEMPTS } = require('./sagaConfig');
 
 class SagaOrchestrator {
     /**
      * @param {object} deps
      * @param {{save:Function, updateStatus:Function}} deps.orderRepository
      * @param {{reserve:Function, release:Function}} deps.inventoryRepository
-     * @param {{save:Function, findBySagaId:Function, compareAndAdvance:Function}} deps.sagaRepository
+     * @param {{save:Function, findBySagaId:Function, compareAndAdvance:Function, retryCompensation:Function}} deps.sagaRepository
      * @param {boolean} [deps.pointsEnabled=true]
+     * @param {() => Date} [deps.now] 테스트 주입용 시계
+     * @param {number} [deps.stepTimeoutMs] STARTED T1 deadline 계산용(정지-전진 감지)
+     * @param {number} [deps.maxCompensateAttempts] 보상 재시도 상한
      */
-    constructor({ orderRepository, inventoryRepository, sagaRepository, pointsEnabled = true }) {
+    constructor({ orderRepository, inventoryRepository, sagaRepository, pointsEnabled = true, now = () => new Date(), stepTimeoutMs = STEP_TIMEOUT_MS, maxCompensateAttempts = MAX_COMPENSATE_ATTEMPTS }) {
         this._orderRepo = orderRepository;
         this._inventoryRepo = inventoryRepository;
         this._sagaRepo = sagaRepository;
         this._pointsEnabled = pointsEnabled;
+        this._now = now;
+        this._stepTimeoutMs = stepTimeoutMs;
+        this._maxCompensateAttempts = maxCompensateAttempts;
     }
 
-    /** 주문 시작: 주문 저장 → Saga 생성 → 재고 예약(멱등) → INVENTORY_RESERVED + CHARGE outbox 적재 */
+    /** 주문 시작: 주문 저장 → Saga 생성(STARTED + T1 deadline) → 재고 예약(멱등) → INVENTORY_RESERVED + CHARGE outbox */
     async startOrder({ userEmail, itemId, quantity, price, correlationId = '' }) {
         const item = new OrderItem(itemId, new Money(price), quantity);
         const order = Order.create(userEmail, item);
@@ -39,9 +46,10 @@ class SagaOrchestrator {
         const amount = order.totalAmount().amount;
         const sagaId = randomUUID();
 
-        // Saga 생성 (STARTED). CHARGE 는 재고 예약 성공 후 INVENTORY_RESERVED 전이와 함께 원자 적재한다.
+        // Saga 생성 (STARTED). T1 deadline 을 무장해 reserve↔advance 갭 크래시(정지-전진)를 스윕이 감지하게 한다.
         const saga = {
             sagaId, orderId, state: SagaState.STARTED, currentStep: STEP.INVENTORY, correlationId,
+            deadline: new Date(this._now().getTime() + this._stepTimeoutMs),
             steps: [
                 { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId, quantity } },
                 { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId, amount } },
@@ -51,7 +59,20 @@ class SagaOrchestrator {
         };
         await this._sagaRepo.save(saga);
 
-        // T1 재고 예약 (멱등키)
+        return this._reserveAndAdvance(saga);
+    }
+
+    /**
+     * 재고 예약(멱등) → INVENTORY_RESERVED 전이 + CHARGE outbox 적재. 재고 진짜 부족이면 FAILED.
+     * startOrder 와 타임아웃 스윕의 STARTED 정지-전진 재구동이 공유한다(DRY). saga 는 STARTED 상태의 평범한 객체.
+     */
+    async _reserveAndAdvance(saga) {
+        const { sagaId, orderId } = saga;
+        const invStep = saga.steps.find((s) => s.name === STEP.INVENTORY);
+        const { itemId, quantity } = invStep.payload;
+        const amount = saga.steps.find((s) => s.name === STEP.PAYMENT).payload.amount;
+        const correlationId = saga.correlationId || '';
+
         const reserved = await this._inventoryRepo.reserve(itemId, quantity, sagaId);
         if (!reserved) {
             await this._sagaRepo.compareAndAdvance(sagaId, {
@@ -62,7 +83,6 @@ class SagaOrchestrator {
             return { orderId, sagaId, status: 'FAILED' };
         }
 
-        // 재고 예약 성공 → INVENTORY_RESERVED + CHARGE command outbox 적재(원자적)
         await this._sagaRepo.compareAndAdvance(sagaId, {
             from: SagaState.STARTED, to: SagaState.INVENTORY_RESERVED, currentStep: STEP.PAYMENT,
             steps: [{ name: STEP.INVENTORY, status: 'DONE' }],
@@ -86,7 +106,23 @@ class SagaOrchestrator {
             case MSG.PAYMENT_FAILED:    return this._onPaymentFailed(saga);
             case MSG.POINTS_FAILED:     return this._onPointsFailed(saga);
             case MSG.REFUND_SUCCEEDED:  return this._onRefundSucceeded(saga);
+            case MSG.REFUND_FAILED:     return this._onRefundFailed(saga);
             default: return; // 알 수 없는 타입 — 무시
+        }
+    }
+
+    /**
+     * [Phase 4b] 타임아웃 스윕이 deadline 초과 saga 를 넘겨준다. 상태별로 분기하되,
+     * 타임아웃 보상은 기존 실패 핸들러를 그대로 재사용한다(상태머신은 트리거 출처에 무관 — DRY).
+     * @param {object} saga deadline 초과로 스윕이 읽어온 평범한 객체
+     */
+    async handleTimeout(saga) {
+        switch (saga.state) {
+            case SagaState.STARTED:            return this._reserveAndAdvance(saga);       // 정지-전진(L1)
+            case SagaState.INVENTORY_RESERVED: return this._onPaymentFailed(saga);         // 결제 reply 무응답 → C1 only
+            case SagaState.PAYMENT_CHARGED:    return this._onPointsFailed(saga);          // 포인트 reply 무응답 → C2 환불
+            case SagaState.COMPENSATING:       return this._retryOrEscalateCompensation(saga); // [Task 10 에서 구현]
+            default:                           return; // 종결/그 외 — 무시
         }
     }
 
@@ -159,24 +195,75 @@ class SagaOrchestrator {
         // 재고 복원은 환불 성공(REFUND_SUCCEEDED) reply 에서 수행한다.
     }
 
-    /** 환불 성공: COMPENSATING 중일 때만 재고 복원(C1) → FAILED. 잘못된/지연/중복 reply 는 무시. */
+    /**
+     * 환불 성공: 재고 복원(C1) 후 FAILED 로 종결. 잘못된/지연/중복 reply 는 무시.
+     * [§17.12 final-review 자가치유] COMPENSATING 뿐 아니라, 이미 에스컬레이션된 COMPENSATION_FAILED 도 처리한다 —
+     * "MAX 재시도 소진 후 늦게 도착한 환불 성공"의 거짓 COMPENSATION_FAILED 라벨을 FAILED 로 교정하고 미복원 재고를 푼다.
+     * release 는 멱등 + 비종결 상태에서 먼저 실행 → 크래시 시 비종결 잔류로 복구 가능(Phase 4a Codex C1 순서 유지).
+     * 종결 CAS 는 COMPENSATING→FAILED 를 먼저 시도하고, (에스컬레이션이 끼어들었으면) COMPENSATION_FAILED→FAILED 로 마무리해
+     * read-then-CAS 갭에서 에스컬레이션과 겹쳐도 최종 상태가 FAILED 로 수렴하게 한다.
+     */
     async _onRefundSucceeded(saga) {
-        // 진입 가드 [Codex high] — 보상 중(COMPENSATING)이 아니면 부수효과를 절대 수행하지 않는다.
-        // 이미 COMPLETED/FAILED 인 saga 에 지연·중복·오라우팅된 REFUND_SUCCEEDED 가 와도
-        // release/updateStatus 가 실행돼 성공 주문이 FAILED 로 오염되거나 재고가 부풀려지는 것을 막는다.
-        // (COMPENSATING → COMPLETED 전이는 상태머신에 없으므로, COMPENSATING 이면 release 가 항상 정당하다.)
-        if (saga.state !== SagaState.COMPENSATING) return;
+        if (saga.state !== SagaState.COMPENSATING && saga.state !== SagaState.COMPENSATION_FAILED) return;
 
         const inv = saga.steps.find((s) => s.name === STEP.INVENTORY).payload;
-        // release 는 멱등(releasedSagas)이라 종결 CAS 전에 안전하게 실행 — 크래시 시 COMPENSATING 잔류로 복구 가능.
-        await this._inventoryRepo.release(inv.itemId, inv.quantity, saga.sagaId);
+        await this._inventoryRepo.release(inv.itemId, inv.quantity, saga.sagaId); // 멱등
         await this._orderRepo.updateStatus(saga.orderId, 'FAILED');
-        await this._sagaRepo.compareAndAdvance(saga.sagaId, {
-            from: SagaState.COMPENSATING, to: SagaState.FAILED,
-            steps: [
-                { name: STEP.PAYMENT,   status: 'COMPENSATED' },
-                { name: STEP.INVENTORY, status: 'COMPENSATED' },
-            ],
+
+        const compensatedSteps = [
+            { name: STEP.PAYMENT,   status: 'COMPENSATED' },
+            { name: STEP.INVENTORY, status: 'COMPENSATED' },
+        ];
+        const advanced = await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+            from: SagaState.COMPENSATING, to: SagaState.FAILED, steps: compensatedSteps,
+        });
+        if (!advanced) {
+            // COMPENSATING 에서 못 옮겼다 = 에스컬레이션이 먼저 일어났다 → COMPENSATION_FAILED 에서 자가치유.
+            await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+                from: SagaState.COMPENSATION_FAILED, to: SagaState.FAILED, steps: compensatedSteps,
+            });
+        }
+    }
+
+    /** 환불 실패(REFUND_FAILED): 보상 재시도 또는 상한 도달 시 에스컬레이션. 스윕의 COMPENSATING 분기와 공용. */
+    async _onRefundFailed(saga) {
+        return this._retryOrEscalateCompensation(saga);
+    }
+
+    /**
+     * [Phase 4b] COMPENSATING 보상(환불)을 재시도하거나, 상한 도달 시 COMPENSATION_FAILED 로 에스컬레이션.
+     * - 재시도: compensateAttempts 를 CAS 토큰으로 써서 동시 호출(중복 REFUND_FAILED + 스윕)에도 한 번만 재적재.
+     * - 에스컬레이션: 상한 도달 → COMPENSATION_FAILED + 운영자 개입 에러 로그(설계 §17.12.3·§17.12.5 ②).
+     * REFUND_FAILED reply 핸들러와 타임아웃 스윕의 COMPENSATING 분기가 공유한다.
+     */
+    async _retryOrEscalateCompensation(saga) {
+        if (saga.state !== SagaState.COMPENSATING) return; // 보상 중이 아니면 아무 것도 안 함(지연/오라우팅 방어)
+
+        const payStep = saga.steps.find((s) => s.name === STEP.PAYMENT);
+        const attempts = payStep.compensateAttempts || 0;
+        const paymentId = payStep.replyData && payStep.replyData.paymentId;
+
+        if (attempts + 1 >= this._maxCompensateAttempts) {
+            // 더 못 푼다 — 영구 마커(COMPENSATION_FAILED) + 운영자 개입 로그. 승자만 로그(중복 방지).
+            const escalated = await this._sagaRepo.compareAndAdvance(saga.sagaId, {
+                from: SagaState.COMPENSATING, to: SagaState.COMPENSATION_FAILED,
+                steps: [{ name: STEP.PAYMENT, status: 'FAILED' }],
+            });
+            if (escalated) {
+                console.error(`🚨 보상(환불) ${this._maxCompensateAttempts}회 실패 — 운영자 개입 필요 ` +
+                    `sagaId=${saga.sagaId} orderId=${saga.orderId} paymentId=${paymentId} attempts=${attempts + 1}`);
+            }
+            return;
+        }
+
+        // 재시도 — attempts==현재값일 때만 +1 하며 REFUND 재적재(동시 호출 중 하나만 성공).
+        await this._sagaRepo.retryCompensation(saga.sagaId, {
+            stepName: STEP.PAYMENT,
+            expectedAttempts: attempts,
+            outbox: [{
+                queue: QUEUE.PAYMENT_COMMAND,
+                message: { sagaId: saga.sagaId, type: MSG.REFUND, stepName: STEP.PAYMENT, payload: { paymentId, orderId: saga.orderId }, correlationId: saga.correlationId },
+            }],
         });
     }
 }
