@@ -125,7 +125,8 @@ class MongoSagaRepository {
                 steps: { $elemMatch: { name: stepName, compensateAttempts: expectedAttempts } },
             },
             update,
-            { arrayFilters: [{ 's.name': stepName }], returnDocument: 'after' },
+            // arrayFilters 에도 CAS 토큰(compensateAttempts)을 명시 — 갱신 대상 단계를 의도대로 한정.
+            { arrayFilters: [{ 's.name': stepName, 's.compensateAttempts': expectedAttempts }], returnDocument: 'after' },
         ).lean();
     }
 
