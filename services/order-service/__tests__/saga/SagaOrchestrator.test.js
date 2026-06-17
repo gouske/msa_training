@@ -226,4 +226,67 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.PAYMENT_CHARGED, to: SagaState.COMPLETED });
         });
     });
+
+    describe('handleTimeout() — 타임아웃 스윕 위임 (Phase 4b)', () => {
+        test('STARTED 면 재고 예약 후 INVENTORY_RESERVED 로 재구동한다(정지-전진)', async () => {
+            mockInventoryRepo.reserve.mockResolvedValue(true);
+            const saga = {
+                sagaId: 's1', orderId: 'order-1', state: SagaState.STARTED, correlationId: 'trace-1',
+                steps: [
+                    { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId: 'order-1', amount: 10000 } },
+                    { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'b@test.com', amount: 10000 } },
+                ],
+            };
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(mockInventoryRepo.reserve).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.STARTED, to: SagaState.INVENTORY_RESERVED });
+            expect(advanceCall(0)[1].outbox[0].message).toMatchObject({ type: MSG.CHARGE });
+        });
+
+        test('STARTED 인데 재고 진짜 부족이면 FAILED 로 종료한다', async () => {
+            mockInventoryRepo.reserve.mockResolvedValue(false);
+            const saga = {
+                sagaId: 's1', orderId: 'order-1', state: SagaState.STARTED,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'PENDING', payload: { itemId: 'ITEM-1', quantity: 99 } },
+                    { name: STEP.PAYMENT,   status: 'PENDING', payload: { orderId: 'order-1', amount: 10000 } },
+                ],
+            };
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.STARTED, to: SagaState.FAILED });
+            expect(mockOrderRepo.updateStatus).toHaveBeenCalledWith('order-1', 'FAILED');
+        });
+
+        test('INVENTORY_RESERVED 면 결제 실패 보상과 동일 경로(재고복원→FAILED)', async () => {
+            mockSagaRepo.findBySagaId.mockResolvedValue(sagaFixture());
+            const saga = sagaFixture();
+
+            await orchestrator.handleTimeout(saga);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.INVENTORY_RESERVED, to: SagaState.COMPENSATING });
+            expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2, 's1');
+            expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
+        });
+
+        test('PAYMENT_CHARGED 면 포인트 실패 보상과 동일 경로(REFUND 적재)', async () => {
+            const charged = sagaFixture({
+                state: SagaState.PAYMENT_CHARGED, currentStep: STEP.POINTS,
+                steps: [
+                    { name: STEP.INVENTORY, status: 'DONE', payload: { itemId: 'ITEM-1', quantity: 2 } },
+                    { name: STEP.PAYMENT,   status: 'DONE', payload: { orderId: 'order-1', amount: 10000 }, replyData: { paymentId: 'PAY-1' } },
+                    { name: STEP.POINTS,    status: 'PENDING', payload: { userEmail: 'b@test.com', amount: 10000 } },
+                ],
+            });
+
+            await orchestrator.handleTimeout(charged);
+
+            expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.PAYMENT_CHARGED, to: SagaState.COMPENSATING });
+            expect(advanceCall(0)[1].outbox[0].message).toMatchObject({ type: MSG.REFUND, payload: { paymentId: 'PAY-1', orderId: 'order-1' } });
+        });
+    });
 });

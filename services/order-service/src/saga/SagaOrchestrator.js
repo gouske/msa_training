@@ -110,6 +110,21 @@ class SagaOrchestrator {
         }
     }
 
+    /**
+     * [Phase 4b] 타임아웃 스윕이 deadline 초과 saga 를 넘겨준다. 상태별로 분기하되,
+     * 타임아웃 보상은 기존 실패 핸들러를 그대로 재사용한다(상태머신은 트리거 출처에 무관 — DRY).
+     * @param {object} saga deadline 초과로 스윕이 읽어온 평범한 객체
+     */
+    async handleTimeout(saga) {
+        switch (saga.state) {
+            case SagaState.STARTED:            return this._reserveAndAdvance(saga);       // 정지-전진(L1)
+            case SagaState.INVENTORY_RESERVED: return this._onPaymentFailed(saga);         // 결제 reply 무응답 → C1 only
+            case SagaState.PAYMENT_CHARGED:    return this._onPointsFailed(saga);          // 포인트 reply 무응답 → C2 환불
+            case SagaState.COMPENSATING:       return this._retryOrEscalateCompensation(saga); // [Task 10 에서 구현]
+            default:                           return; // 종결/그 외 — 무시
+        }
+    }
+
     /** 결제 성공: INVENTORY_RESERVED → PAYMENT_CHARGED. 포인트 활성 시 EARN outbox, 비활성 시 즉시 완료. */
     async _onPaymentSucceeded(saga, reply) {
         if (this._pointsEnabled) {
