@@ -85,6 +85,11 @@ services:
       CONSUL_SERVICE_ADDRESS: order-service-1
       # [제25강 Saga Phase 3] auth 포인트 participant 가동 → 포인트 단계 활성
       POINTS_ENABLED: "true"
+      # [제25강 Saga Phase 4b] 타임아웃 스윕 + 보상 복구 튜닝 노브
+      STEP_TIMEOUT_MS: "15000"
+      TIMEOUT_SWEEP_INTERVAL_MS: "5000"
+      MAX_COMPENSATE_ATTEMPTS: "5"
+      MAX_OUTBOX_ATTEMPTS: "10"
     labels:
       service: "order-service"
     depends_on:
@@ -109,6 +114,11 @@ services:
       CONSUL_SERVICE_ADDRESS: order-service-2
       # [제25강 Saga Phase 3] auth 포인트 participant 가동 → 포인트 단계 활성
       POINTS_ENABLED: "true"
+      # [제25강 Saga Phase 4b] 타임아웃 스윕 + 보상 복구 튜닝 노브
+      STEP_TIMEOUT_MS: "15000"
+      TIMEOUT_SWEEP_INTERVAL_MS: "5000"
+      MAX_COMPENSATE_ATTEMPTS: "5"
+      MAX_OUTBOX_ATTEMPTS: "10"
     labels:
       service: "order-service"
     depends_on:
