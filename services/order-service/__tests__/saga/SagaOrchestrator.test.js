@@ -269,6 +269,7 @@ describe('SagaOrchestrator (Phase 4a — CAS + outbox)', () => {
             await orchestrator.handleTimeout(saga);
 
             expect(advanceCall(0)[1]).toMatchObject({ from: SagaState.INVENTORY_RESERVED, to: SagaState.COMPENSATING });
+            expect(advanceCall(0)[1].outbox).toBeUndefined(); // 결제 미확정 → 환불 적재 없음(재고복원만, L4)
             expect(mockInventoryRepo.release).toHaveBeenCalledWith('ITEM-1', 2, 's1');
             expect(advanceCall(1)[1]).toMatchObject({ from: SagaState.COMPENSATING, to: SagaState.FAILED });
         });
