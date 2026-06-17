@@ -26,6 +26,7 @@ const SagaSchema = new mongoose.Schema({
     orderId:       { type: String, required: true },
     state:         { type: String, required: true },
     currentStep:   { type: String },
+    deadline:      { type: Date, default: null }, // [Phase 4b] 활성 대기 마감 시각(타임아웃 스윕 앵커). 전이 시 null 로 비우고 릴레이 SENT 시 무장.
     correlationId: { type: String },
     steps:         { type: [SagaStepSchema], default: [] },
     outbox:        { type: [OutboxEntrySchema], default: [] }, // [Phase 4a]
@@ -33,5 +34,8 @@ const SagaSchema = new mongoose.Schema({
 
 // [Phase 4a] 릴레이 워커가 PENDING outbox 보유 saga 를 빠르게 찾도록 인덱스.
 SagaSchema.index({ 'outbox.status': 1 });
+
+// [Phase 4b] 타임아웃 스윕이 "활성 상태 + deadline 초과" saga 를 빠르게 찾도록 복합 인덱스.
+SagaSchema.index({ state: 1, deadline: 1 });
 
 module.exports = mongoose.model('Saga', SagaSchema);

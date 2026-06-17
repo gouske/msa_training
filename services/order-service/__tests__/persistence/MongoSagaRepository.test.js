@@ -116,3 +116,19 @@ describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxA
         expect(saga.outbox.find((e) => e.id === 'A').attempts).toBe(0);
     });
 });
+
+describe('MongoSagaRepository — deadline 필드 라운드트립 (Phase 4b)', () => {
+    const repo = new MongoSagaRepository();
+
+    beforeAll(mem.connect);
+    afterEach(mem.clear);
+    afterAll(mem.close);
+
+    test('top-level deadline 을 저장하고 그대로 읽어온다', async () => {
+        const deadline = new Date('2026-06-17T00:00:00.000Z');
+        await repo.save({ sagaId: 'd1', orderId: 'o', state: 'STARTED', steps: [], outbox: [], deadline });
+
+        const saga = await repo.findBySagaId('d1');
+        expect(saga.deadline).toEqual(deadline);
+    });
+});
