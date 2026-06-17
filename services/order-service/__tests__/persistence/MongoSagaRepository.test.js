@@ -65,6 +65,21 @@ describe('MongoSagaRepository — compareAndAdvance (CAS + outbox)', () => {
         const winners = [a, b].filter((r) => r !== null);
         expect(winners).toHaveLength(1); // 단 하나의 처리자만 전이에 성공
     });
+
+    test('전이에 성공하면 deadline 을 null 로 비운다 (다음 SENT 까지 스윕 제외)', async () => {
+        await repo.save({
+            sagaId: 's-dl', orderId: 'o', state: 'INVENTORY_RESERVED', currentStep: 'T2_PAYMENT',
+            deadline: new Date('2020-01-01T00:00:00.000Z'), // 과거 — 비워져야 함
+            steps: [{ name: 'T2_PAYMENT', status: 'PENDING', payload: {} }], outbox: [],
+        });
+
+        const result = await repo.compareAndAdvance('s-dl', {
+            from: 'INVENTORY_RESERVED', to: 'COMPENSATING',
+            steps: [{ name: 'T2_PAYMENT', status: 'FAILED' }],
+        });
+
+        expect(result.deadline).toBeNull();
+    });
 });
 
 describe('MongoSagaRepository — outbox 발행 표시(markOutboxSent/incOutboxAttempt)', () => {

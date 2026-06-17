@@ -47,7 +47,9 @@ class MongoSagaRepository {
      * @returns {Promise<object|null>} 갱신된 saga(평범한 객체) 또는 null
      */
     async compareAndAdvance(sagaId, { from, to, currentStep, steps = [], outbox = [] }) {
-        const set = { state: to };
+        // [Phase 4b] 모든 전이는 deadline 을 비운다 — 다음 command 가 실제 SENT 될 때 릴레이가 다시 무장한다.
+        // (전이 직후~발행 전 구간에 옛 deadline 이 남아 거짓 타임아웃 보상되는 것을 막는다. 설계 §17.12.1)
+        const set = { state: to, deadline: null };
         if (currentStep) set.currentStep = currentStep;
 
         // 각 step 을 arrayFilters 로 정확히 지목해 갱신한다.
