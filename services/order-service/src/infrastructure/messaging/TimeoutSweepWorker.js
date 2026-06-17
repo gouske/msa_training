@@ -47,7 +47,12 @@ class TimeoutSweepWorker {
     async tick() {
         const timedOut = await this._repo.findTimedOut(this._now(), this._batchSize);
         for (const saga of timedOut) {
-            await this._orchestrator.handleTimeout(saga);
+            // saga 별 에러 격리 — 한 건의 실패가 같은 배치의 나머지 처리를 막지 않게 한다(다음 주기에 재시도).
+            try {
+                await this._orchestrator.handleTimeout(saga);
+            } catch (err) {
+                console.error(`🚨 타임아웃 처리 실패 sagaId=${saga.sagaId}:`, err.message);
+            }
         }
     }
 }

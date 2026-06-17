@@ -38,4 +38,18 @@ describe('TimeoutSweepWorker', () => {
         worker.stop();
         expect(worker._timer).toBeNull();
     });
+
+    test('한 saga 처리 실패가 나머지 saga 처리를 막지 않는다(에러 격리)', async () => {
+        repo.findTimedOut.mockResolvedValue([{ sagaId: 's1' }, { sagaId: 's2' }, { sagaId: 's3' }]);
+        orchestrator.handleTimeout.mockImplementation(async (saga) => {
+            if (saga.sagaId === 's2') throw new Error('boom');
+        });
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        await worker.tick();
+
+        expect(orchestrator.handleTimeout).toHaveBeenCalledTimes(3); // s2 실패에도 s1·s3 처리됨
+        expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('타임아웃 처리 실패'), expect.anything());
+        errSpy.mockRestore();
+    });
 });
