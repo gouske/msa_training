@@ -1,7 +1,9 @@
 package com.example.auth.config
 
+import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.annotation.Order
 import org.springframework.http.HttpMethod
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
@@ -34,11 +36,32 @@ class SecurityConfig {
     @Bean
     fun passwordEncoder() = BCryptPasswordEncoder()
 
+    // [관측성 검증에서 발견된 버그 수정] Actuator 전용 필터 체인.
+    //
+    // 기존 가정("management 포트(9081)는 SecurityFilterChain 에 닿지 않는다")은 틀렸다 —
+    // Spring Boot 는 management 자식 컨텍스트에도 springSecurityFilterChain 을 등록하므로
+    // 아래 비즈니스 체인의 anyRequest().authenticated() 가 /actuator/** 까지 차단해
+    // Prometheus scrape 가 403 으로 실패했다 (health / prometheus 모두).
+    //
+    // 보안 경계는 포트 분리로 이미 확보되어 있다: 9081 은 docker-compose 에서 호스트에
+    // 노출되지 않고 내부 네트워크의 Prometheus 컨테이너만 도달 가능. 따라서 Actuator
+    // 엔드포인트(health, prometheus 만 노출됨)는 permitAll 이 설계 의도에 부합한다.
+    @Bean
+    @Order(1)
+    fun actuatorFilterChain(http: HttpSecurity): SecurityFilterChain {
+        http
+            .securityMatcher(EndpointRequest.toAnyEndpoint())
+            .csrf { it.disable() }
+            .authorizeHttpRequests { it.anyRequest().permitAll() }
+        return http.build()
+    }
+
     // 3. 보안 필터 설정 (누가 들어올 수 있는지 정함)
     /**
      * 우리 성(서버) 전체의 보안 규칙을 정하는 설계도입니다.
      */
     @Bean
+    @Order(2)
     fun filterChain(http: HttpSecurity, jwtTokenProvider: JwtTokenProvider): SecurityFilterChain {
         http
             .csrf { it.disable() } // 테스트를 위해 CSRF 보안은 잠시 끕니다.
