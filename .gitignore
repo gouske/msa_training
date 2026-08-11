@@ -34,6 +34,9 @@ obj/
 !.claude/agents/
 !.claude/settings.json
 
+# Obsidian 개인 vault 설정
+.obsidian/
+
 # Kubernetes secrets (실제 값 포함 — 커밋 금지)
 # k8s/secrets.example.yml 만 저장소에 커밋하고,
 # 로컬에서 secrets.yml 로 복사해서 사용한다.
