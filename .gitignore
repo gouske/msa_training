@@ -37,6 +37,10 @@ obj/
 # Obsidian 개인 vault 설정
 .obsidian/
 
+# Playwright MCP 작업 산출물 (스냅샷 yml / 콘솔 로그 / 스크린샷)
+# 브라우저 자동화 도구가 저장소 루트에 임의로 생성한다 — 저장소와 무관한 임시 파일.
+.playwright-mcp/
+
 # Kubernetes secrets (실제 값 포함 — 커밋 금지)
 # k8s/secrets.example.yml 만 저장소에 커밋하고,
 # 로컬에서 secrets.yml 로 복사해서 사용한다.
